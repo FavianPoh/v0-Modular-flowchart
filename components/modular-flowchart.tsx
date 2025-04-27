@@ -3,49 +3,42 @@
 import type React from "react"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import ReactFlow, {
-  ReactFlowProvider,
-  MiniMap,
-  Controls,
-  Background,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-  type Connection,
-  type Edge,
-  type NodeTypes,
-  Panel,
-  MarkerType,
-  type Node,
-} from "reactflow"
+import { useNodesState, useEdgesState, addEdge, type Connection, type Edge, MarkerType } from "reactflow"
 import "reactflow/dist/style.css"
-import { Plus, Save, RotateCcw, ZoomIn, Link, RefreshCw, Code, Library } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
-import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/components/ui/use-toast"
 import { initialNodes, initialEdges } from "@/lib/initial-flow-data"
 import { ModuleNode } from "@/components/module-node"
+import { createNewModule } from "@/lib/module-utils"
+import { recalculateFlowchart, executeModule } from "@/lib/recalculation-utils"
+import type { ModuleLibraryItem } from "@/components/module-library"
 import { ModuleDetails } from "@/components/module-details"
 import { ConnectionPanel } from "@/components/connection-panel"
-import { createNewModule } from "@/lib/module-utils"
-import { recalculateFlowchart } from "@/lib/recalculation-utils"
-import { InputManager } from "@/components/input-manager"
-import { FormulaBuilder } from "@/components/formula-builder"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { CodeExportDialog } from "@/components/code-export-dialog"
-import { ModuleLibrary, type ModuleLibraryItem } from "@/components/module-library"
+import { ModuleLibrary } from "@/components/module-library"
+import { FlowchartToolbar } from "@/components/flowchart-toolbar"
+import { HeatmapLegend } from "@/components/heatmap-legend"
+import { SensitivityDashboard, type SimulationResult } from "@/components/sensitivity-dashboard"
+import { AddModuleDialog } from "@/components/add-module-dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
-const nodeTypes: NodeTypes = {
+// Import ReactFlow components
+import ReactFlow, { Background, Controls, MiniMap } from "reactflow"
+
+const nodeTypes = {
   moduleNode: ModuleNode,
 }
 
 const STORAGE_KEY = "modular-flowchart-data"
+const AUTO_SAVE_INTERVAL = 10000 // 10 seconds auto-save interval
 
 // This is the inner component that uses ReactFlow hooks
 function FlowChart() {
@@ -59,9 +52,11 @@ function FlowChart() {
   const pendingRecalculationRef = useRef(false)
   const isInitialRenderRef = useRef(true)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const autoSaveIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const isSavingRef = useRef(false)
   const skipEffectsRef = useRef(true)
   const updateNodeDataTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastSaveTimestampRef = useRef<number>(Date.now())
 
   // Add delete handler to initial nodes
   const initialNodesWithHandlers = initialNodes.map((node) => ({
@@ -76,6 +71,8 @@ function FlowChart() {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [isSaveDefaultConfirmOpen, setSaveDefaultConfirmOpen] = useState(false)
+  const [nodeToSaveDefaults, setNodeToSaveDefaults] = useState<string | null>(null)
   const [isAddingModule, setIsAddingModule] = useState(false)
   const [isManagingConnections, setIsManagingConnections] = useState(false)
   const [isExportingCode, setIsExportingCode] = useState(false)
@@ -92,6 +89,11 @@ function FlowChart() {
   const [needsRecalculation, setNeedsRecalculation] = useState(false)
   const [activeTab, setActiveTab] = useState("basic")
   const [isInitialized, setIsInitialized] = useState(false)
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false)
+  const [heatmapMetric, setHeatmapMetric] = useState("profit")
+  const [isSensitivityAnalysisOpen, setIsSensitivityAnalysisOpen] = useState(false)
+  const [simulationResults, setSimulationResults] = useState<SimulationResult | null>(null)
+  const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null)
   const { toast } = useToast()
 
   // Update refs when state changes - use a single effect to minimize renders
@@ -111,7 +113,7 @@ function FlowChart() {
       try {
         const savedData = localStorage.getItem(STORAGE_KEY)
         if (savedData) {
-          const { nodes: savedNodes, edges: savedEdges } = JSON.parse(savedData)
+          const { nodes: savedNodes, edges: savedEdges, timestamp } = JSON.parse(savedData)
 
           // Add delete handler to saved nodes
           const nodesWithHandlers = savedNodes.map((node: any) => ({
@@ -127,6 +129,7 @@ function FlowChart() {
 
           setNodes(nodesWithHandlers)
           setEdges(savedEdges)
+          setLastSavedTime(timestamp ? new Date(timestamp) : new Date())
         } else {
           // If no saved data, use initial data
           setNodes(initialNodesWithHandlers)
@@ -140,7 +143,7 @@ function FlowChart() {
         setTimeout(() => {
           initialLoadComplete.current = true
           skipEffectsRef.current = false
-        }, 2000)
+        }, 1000)
       } catch (error) {
         console.error("Error loading saved data:", error)
         // Fallback to initial data
@@ -151,7 +154,7 @@ function FlowChart() {
         setTimeout(() => {
           initialLoadComplete.current = true
           skipEffectsRef.current = false
-        }, 2000)
+        }, 1000)
       }
     }
 
@@ -159,36 +162,93 @@ function FlowChart() {
     setTimeout(loadData, 500)
   }, [])
 
-  // Save data to localStorage - completely separated from render cycle
-  const saveFlowchartData = useCallback(() => {
-    if (!isInitialized || !initialLoadComplete.current || isSavingRef.current) return
+  // Set up auto-save interval
+  useEffect(() => {
+    if (!isInitialized || !initialLoadComplete.current) return
 
-    try {
-      isSavingRef.current = true
-      // Create a clean version of nodes without circular references
-      const nodesToSave = nodesRef.current.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          // Don't save the function itself, just the code
-          function: undefined,
-        },
-      }))
+    // Clear any existing interval
+    if (autoSaveIntervalRef.current) {
+      clearInterval(autoSaveIntervalRef.current)
+    }
 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: nodesToSave, edges: edgesRef.current }))
-      isSavingRef.current = false
-    } catch (error) {
-      console.error("Error saving data:", error)
-      isSavingRef.current = false
+    // Set up auto-save interval
+    autoSaveIntervalRef.current = setInterval(() => {
+      // Only auto-save if changes were made since last save
+      const now = Date.now()
+      if (now - lastSaveTimestampRef.current > 2000) {
+        // Only save if more than 2 seconds since last save
+        saveFlowchartData(true) // silent save
+      }
+    }, AUTO_SAVE_INTERVAL)
+
+    return () => {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current)
+      }
     }
   }, [isInitialized])
+
+  // Save data to localStorage - completely separated from render cycle
+  const saveFlowchartData = useCallback(
+    (silent = false) => {
+      if (!isInitialized || !initialLoadComplete.current || isSavingRef.current) return
+
+      try {
+        isSavingRef.current = true
+        // Create a clean version of nodes without circular references
+        const nodesToSave = nodesRef.current.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            // Don't save the function itself, just the code
+            function: undefined,
+          },
+        }))
+
+        const timestamp = Date.now()
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            nodes: nodesToSave,
+            edges: edgesRef.current,
+            timestamp,
+          }),
+        )
+
+        lastSaveTimestampRef.current = timestamp
+        setLastSavedTime(new Date(timestamp))
+
+        if (!silent) {
+          toast({
+            title: "Flowchart saved",
+            description: `Your flowchart and all current input values have been saved`,
+            duration: 2000,
+          })
+        }
+
+        isSavingRef.current = false
+      } catch (error) {
+        console.error("Error saving data:", error)
+        isSavingRef.current = false
+
+        if (!silent) {
+          toast({
+            title: "Save failed",
+            description: "There was an error saving your flowchart",
+            variant: "destructive",
+          })
+        }
+      }
+    },
+    [isInitialized, toast],
+  )
 
   // Debounced save function
   const debouncedSave = useCallback(() => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
-    saveTimeoutRef.current = setTimeout(saveFlowchartData, 1000)
+    saveTimeoutRef.current = setTimeout(() => saveFlowchartData(true), 2000)
   }, [saveFlowchartData])
 
   // Trigger save when nodes or edges change - with safeguards
@@ -202,6 +262,9 @@ function FlowChart() {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
+      }
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current)
       }
       if (updateNodeDataTimeoutRef.current) {
         clearTimeout(updateNodeDataTimeoutRef.current)
@@ -235,47 +298,53 @@ function FlowChart() {
   }, [nodes, setSelectedNode])
 
   // Recalculate the flowchart when needed - completely separated from render cycle
-  const recalculate = useCallback(() => {
-    if (isRecalculatingRef.current) {
-      pendingRecalculationRef.current = true
-      return
-    }
-
-    isRecalculatingRef.current = true
-    setNeedsRecalculation(false)
-
-    // Use setTimeout to completely break out of the render cycle
-    setTimeout(() => {
-      try {
-        const currentNodes = nodesRef.current
-        const currentEdges = edgesRef.current
-
-        const updatedNodes = recalculateFlowchart(currentNodes, currentEdges)
-
-        // Only update if there are actual changes
-        if (updatedNodes !== currentNodes) {
-          setNodes(updatedNodes)
-        }
-
-        toast({
-          title: "Flowchart recalculated",
-          description: "All module values have been updated",
-          duration: 2000,
-        })
-      } catch (error) {
-        console.error("Error during recalculation:", error)
-      } finally {
-        // Always reset the flag
-        isRecalculatingRef.current = false
-
-        // If there's a pending recalculation, do it now
-        if (pendingRecalculationRef.current) {
-          pendingRecalculationRef.current = false
-          setTimeout(recalculate, 0)
-        }
+  const recalculate = useCallback(
+    (changedNodeId?: string) => {
+      if (isRecalculatingRef.current) {
+        pendingRecalculationRef.current = true
+        return
       }
-    }, 0)
-  }, [setNodes, toast])
+
+      isRecalculatingRef.current = true
+      setNeedsRecalculation(false)
+
+      // Use setTimeout to completely break out of the render cycle
+      setTimeout(() => {
+        try {
+          const currentNodes = nodesRef.current
+          const currentEdges = edgesRef.current
+
+          // Pass the changed node ID to optimize recalculation
+          const updatedNodes = recalculateFlowchart(currentNodes, currentEdges, changedNodeId)
+
+          // Only update if there are actual changes
+          if (updatedNodes !== currentNodes) {
+            setNodes(updatedNodes)
+            // Trigger a save to persist the changes
+            debouncedSave()
+          }
+
+          toast({
+            title: "Flowchart recalculated",
+            description: "All module values have been updated",
+            duration: 2000,
+          })
+        } catch (error) {
+          console.error("Error during recalculation:", error)
+        } finally {
+          // Always reset the flag
+          isRecalculatingRef.current = false
+
+          // If there's a pending recalculation, do it now
+          if (pendingRecalculationRef.current) {
+            pendingRecalculationRef.current = false
+            setTimeout(recalculate, 0)
+          }
+        }
+      }, 0)
+    },
+    [setNodes, toast, debouncedSave],
+  )
 
   // Trigger recalculation when needed - with safeguards
   useEffect(() => {
@@ -349,8 +418,11 @@ function FlowChart() {
         title: "Module deleted",
         description: "Module and its connections have been removed",
       })
+
+      // Trigger save to persist the deletion
+      debouncedSave()
     },
-    [setEdges, setNodes, selectedNode, toast],
+    [setEdges, setNodes, selectedNode, toast, debouncedSave],
   )
 
   // Cancel a module (for user-added modules)
@@ -386,15 +458,32 @@ function FlowChart() {
         title: "Module reset",
         description: "Module has been reset to its default state",
       })
+
+      // Trigger save to persist the reset
+      debouncedSave()
     },
-    [nodes, setNodes, toast],
+    [nodes, setNodes, toast, debouncedSave],
   )
 
   const handleFormulaChange = (formula: string, functionCode: string) => {
-    // Only update if the values have actually changed
-    if (newModuleFormula !== formula || newModuleFunctionCode !== functionCode) {
-      setNewModuleFormula(formula)
-      setNewModuleFunctionCode(functionCode)
+    try {
+      // Basic validation - check if the code has balanced braces
+      let braceCount = 0
+      for (let i = 0; i < functionCode.length; i++) {
+        if (functionCode[i] === "{") braceCount++
+        if (functionCode[i] === "}") braceCount--
+        if (braceCount < 0) throw new Error("Unbalanced braces")
+      }
+      if (braceCount !== 0) throw new Error("Unbalanced braces")
+
+      // Only update if the values have actually changed
+      if (newModuleFormula !== formula || newModuleFunctionCode !== functionCode) {
+        setNewModuleFormula(formula)
+        setNewModuleFunctionCode(functionCode)
+      }
+    } catch (error) {
+      console.error("Invalid function code:", error)
+      // Don't update the state with invalid code
     }
   }
 
@@ -408,6 +497,22 @@ function FlowChart() {
       return
     }
 
+    // Ensure we have valid function code
+    let safeFunctionCode = newModuleFunctionCode
+    try {
+      // Basic validation
+      if (!safeFunctionCode.includes("return")) {
+        safeFunctionCode = `return { result: 0 };`
+      }
+
+      // Try to create a function to validate the code
+      new Function("inputs", safeFunctionCode)
+    } catch (error) {
+      console.error("Invalid function code:", error)
+      // Provide a fallback valid function
+      safeFunctionCode = `return { result: 0 };`
+    }
+
     // Create a new module with custom inputs and function
     const newNode = createNewModule(
       newModuleType,
@@ -415,7 +520,7 @@ function FlowChart() {
       nodes,
       newModuleDescription,
       newModuleInputs,
-      newModuleFunctionCode,
+      safeFunctionCode,
     )
 
     // Mark as user-added and add delete handler
@@ -436,6 +541,9 @@ function FlowChart() {
       title: "Module added",
       description: `${newModuleName} has been added to the flowchart`,
     })
+
+    // Trigger save to persist the new module
+    debouncedSave()
   }
 
   // Add a module from the library
@@ -460,6 +568,9 @@ function FlowChart() {
 
     setNodes((nds) => [...nds, newNode])
 
+    // Trigger save to persist the new library module
+    debouncedSave()
+
     toast({
       title: "Module added from library",
       description: `${moduleItem.name} has been added to the flowchart`,
@@ -469,10 +580,6 @@ function FlowChart() {
   const handleSaveFlowchart = () => {
     try {
       saveFlowchartData()
-      toast({
-        title: "Flowchart saved",
-        description: "Your flowchart has been saved successfully",
-      })
     } catch (error) {
       console.error("Error saving flowchart:", error)
       toast({
@@ -503,6 +610,9 @@ function FlowChart() {
       title: "Flowchart reset",
       description: "Your flowchart has been reset to the initial state",
     })
+
+    // Save the reset flowchart
+    saveFlowchartData()
   }
 
   const updateNodeData = useCallback(
@@ -514,6 +624,11 @@ function FlowChart() {
 
       // Use timeout to batch updates and prevent cascading renders
       updateNodeDataTimeoutRef.current = setTimeout(() => {
+        console.log(`Updating node ${nodeId} with data:`, newData)
+
+        // Track if inputs have changed to trigger immediate recalculation
+        const hasInputChanges = newData.inputs !== undefined
+
         setNodes((nds) =>
           nds.map((node) => {
             if (node.id === nodeId) {
@@ -531,20 +646,21 @@ function FlowChart() {
           }),
         )
 
-        // Delay setting needsRecalculation to prevent immediate recalculation
-        setTimeout(() => {
-          setNeedsRecalculation(true)
-        }, 0)
+        // Always set needsRecalculation to true when node data changes
+        setNeedsRecalculation(true)
 
-        if (!autoRecalculate) {
-          toast({
-            title: "Module updated",
-            description: "Click 'Recalculate' to update dependent modules",
-          })
+        // Force recalculation immediately for input changes
+        if (hasInputChanges) {
+          setTimeout(() => {
+            recalculate(nodeId)
+          }, 50)
         }
+
+        // Trigger save to persist the node data changes
+        debouncedSave()
       }, 0)
     },
-    [setNodes, deleteNode, cancelModule, autoRecalculate, toast],
+    [setNodes, deleteNode, cancelModule, recalculate, debouncedSave],
   )
 
   const closeDetails = () => {
@@ -558,116 +674,272 @@ function FlowChart() {
     }
   }
 
-  // Add a custom connection between modules
-  const handleAddConnection = useCallback(
-    (sourceId: string, sourceHandle: string, targetId: string, targetHandle: string) => {
-      const newEdge = {
-        id: `e${sourceId}-${targetId}-${Date.now()}`,
-        source: sourceId,
-        sourceHandle: sourceHandle,
-        target: targetId,
-        targetHandle: targetHandle,
-        animated: true,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-        },
-      }
-
-      setEdges((eds) => [...eds, newEdge])
-
-      // Delay setting needsRecalculation to prevent immediate recalculation
-      setTimeout(() => {
-        setNeedsRecalculation(true)
-      }, 0)
-
-      toast({
-        title: "Connection added",
-        description: autoRecalculate
-          ? "Modules will be updated automatically"
-          : "Click 'Recalculate' to update module values",
-      })
-    },
-    [setEdges, autoRecalculate, toast],
-  )
-
-  // Delete a connection
-  const handleDeleteConnection = useCallback(
-    (edgeId: string) => {
-      setEdges((eds) => eds.filter((e) => e.id !== edgeId))
-
-      // Delay setting needsRecalculation to prevent immediate recalculation
-      setTimeout(() => {
-        setNeedsRecalculation(true)
-      }, 0)
-
-      toast({
-        title: "Connection removed",
-        description: autoRecalculate
-          ? "Modules will be updated automatically"
-          : "Click 'Recalculate' to update module values",
-      })
-    },
-    [setEdges, autoRecalculate, toast],
-  )
-
-  // Handle auto-recalculate toggle without triggering immediate recalculation
-  const handleAutoRecalculateChange = (checked: boolean) => {
-    setAutoRecalculate(checked)
-    // Don't trigger recalculation immediately
-  }
-
-  // Handle import flowchart from code
-  const handleImportFlowchart = (importedNodes: Node[], importedEdges: Edge[]) => {
-    // Add delete and cancel handlers to imported nodes
-    const nodesWithHandlers = importedNodes.map((node) => ({
-      ...node,
-      data: {
-        ...node.data,
-        onDelete: (nodeId: string) => deleteNode(nodeId),
-        onCancel: (nodeId: string) => cancelModule(nodeId),
+  // Handle adding a connection from the connection panel
+  const handleAddConnection = (sourceId: string, sourceHandle: string, targetId: string, targetHandle: string) => {
+    const newEdge = {
+      id: `e${sourceId}-${targetId}-${Date.now()}`,
+      source: sourceId,
+      target: targetId,
+      sourceHandle,
+      targetHandle,
+      animated: true,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
       },
-    }))
+    }
 
-    setNodes(nodesWithHandlers)
-    setEdges(importedEdges)
+    setEdges((eds) => [...eds, newEdge])
+    setNeedsRecalculation(true)
 
-    // Delay setting needsRecalculation to prevent immediate recalculation
-    setTimeout(() => {
-      setNeedsRecalculation(true)
-    }, 0)
+    // Save the new connection
+    debouncedSave()
   }
 
-  // Update the onAddNode function in modular-flowchart.tsx to mark user-added modules
+  // Handle deleting a connection from the connection panel
+  const handleDeleteConnection = (edgeId: string) => {
+    setEdges((eds) => eds.filter((e) => e.id !== edgeId))
+    setNeedsRecalculation(true)
 
-  const onAddNode = useCallback(
-    (moduleTemplate: any) => {
-      const newNode: any = {
-        id: `module_${Date.now()}`,
-        type: "moduleNode",
-        position: { x: 100, y: 100 },
-        data: {
-          ...moduleTemplate,
-          label: moduleTemplate.label || "New Module",
-          isUserAdded: true, // Mark this module as user-added
-          inputs: [],
-          formula: "",
-          value: null,
-          onDelete: deleteNode,
-          onCancel: cancelModule,
-        },
+    // Save the deletion
+    debouncedSave()
+  }
+
+  // Calculate heatmap values for nodes
+  const getHeatmapValues = () => {
+    if (!heatmapEnabled || !heatmapMetric) return { min: 0, max: 0 }
+
+    // Find all nodes that have the selected metric as an output
+    const nodesWithMetric = nodes.filter((node) => node.data.outputs && node.data.outputs[heatmapMetric] !== undefined)
+
+    if (nodesWithMetric.length === 0) return { min: 0, max: 0 }
+
+    // Get min and max values
+    const values = nodesWithMetric.map((node) => Number(node.data.outputs[heatmapMetric]))
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+
+    return { min, max }
+  }
+
+  const { min: heatmapMin, max: heatmapMax } = getHeatmapValues()
+
+  // Add heatmap coloring to nodes if enabled
+  const nodesWithHeatmap = useCallback(() => {
+    if (!heatmapEnabled || !heatmapMetric) return nodes
+
+    return nodes.map((node) => {
+      // Only apply heatmap to nodes that have the selected metric
+      if (node.data.outputs && node.data.outputs[heatmapMetric] !== undefined) {
+        const value = Number(node.data.outputs[heatmapMetric])
+        // Calculate color intensity based on value position between min and max
+        const normalizedValue = heatmapMax > heatmapMin ? (value - heatmapMin) / (heatmapMax - heatmapMin) : 0.5
+
+        // Create a style object with the heatmap color
+        const heatmapStyle = {
+          background: `rgba(255, ${Math.round(255 * (1 - normalizedValue))}, ${Math.round(255 * (1 - normalizedValue))}, 0.2)`,
+          borderColor: `rgba(255, ${Math.round(255 * (1 - normalizedValue))}, ${Math.round(255 * (1 - normalizedValue))}, 0.8)`,
+        }
+
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            heatmapStyle,
+          },
+        }
       }
+      return node
+    })
+  }, [nodes, heatmapEnabled, heatmapMetric, heatmapMin, heatmapMax])
 
-      setNodes((nds) => nds.concat(newNode))
-      setSelectedNode(newNode.id)
+  // Add these new handlers for the ModuleNode component
+
+  // Handle updating inputs directly from the node
+  const handleUpdateNodeInputs = useCallback(
+    (nodeId: string, newInputs: Record<string, any>) => {
+      console.log("Updating node inputs from expanded view:", nodeId, newInputs)
+
+      setNodes((nds) =>
+        nds.map((node) => {
+          if (node.id === nodeId) {
+            // Execute the function with new inputs to get updated outputs
+            const updatedNode = {
+              ...node,
+              data: {
+                ...node.data,
+                inputs: newInputs,
+              },
+            }
+
+            // Calculate new outputs
+            let newOutputs = {}
+            try {
+              newOutputs = executeModule(updatedNode.data)
+              console.log("New outputs calculated:", newOutputs)
+            } catch (error) {
+              console.error("Error calculating outputs:", error)
+            }
+
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                inputs: newInputs,
+                outputs: newOutputs,
+                needsRecalculation: false,
+                onUpdateInputs: handleUpdateNodeInputs,
+                onRecalculate: handleRecalculateNode,
+                onSaveDefaults: handleOpenSaveDefaultsDialog,
+              },
+            }
+          }
+          return node
+        }),
+      )
+
+      // Trigger recalculation of dependent nodes
+      setTimeout(() => {
+        recalculate(nodeId)
+      }, 100)
+
+      // Trigger save to persist the changes
+      debouncedSave()
+
+      toast({
+        title: "Input values updated",
+        description: "Changes are being propagated through the flowchart",
+        duration: 2000,
+      })
     },
-    [setNodes, setSelectedNode, deleteNode, cancelModule],
+    [setNodes, recalculate, debouncedSave, toast],
   )
 
+  // Handle recalculating a single node
+  const handleRecalculateNode = useCallback(
+    (nodeId: string) => {
+      console.log("Recalculating node:", nodeId)
+
+      setNodes((nds) =>
+        nds.map((node) => {
+          if (node.id === nodeId) {
+            // Calculate new outputs
+            let newOutputs = {}
+            try {
+              newOutputs = executeModule(node.data)
+              console.log("Node recalculated, new outputs:", newOutputs)
+            } catch (error) {
+              console.error("Error recalculating node:", error)
+            }
+
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                outputs: newOutputs,
+                needsRecalculation: false,
+              },
+            }
+          }
+          return node
+        }),
+      )
+
+      // Trigger recalculation of dependent nodes
+      setTimeout(() => {
+        recalculate(nodeId)
+      }, 100)
+
+      toast({
+        title: "Node recalculated",
+        description: "Module values have been updated",
+        duration: 2000,
+      })
+    },
+    [setNodes, recalculate, toast],
+  )
+
+  // Open save defaults confirmation dialog
+  const handleOpenSaveDefaultsDialog = useCallback((nodeId: string) => {
+    setNodeToSaveDefaults(nodeId)
+    setSaveDefaultConfirmOpen(true)
+  }, [])
+
+  // Save current inputs as default values
+  const handleSaveDefaults = useCallback(() => {
+    if (!nodeToSaveDefaults) return
+
+    console.log("Saving defaults for node:", nodeToSaveDefaults)
+
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === nodeToSaveDefaults) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              defaultInputs: { ...node.data.inputs },
+            },
+          }
+        }
+        return node
+      }),
+    )
+
+    // Close dialog
+    setSaveDefaultConfirmOpen(false)
+    setNodeToSaveDefaults(null)
+
+    // Trigger save to persist the changes
+    debouncedSave()
+
+    toast({
+      title: "Default values saved",
+      description: "Current input values are now the default for this module",
+      duration: 3000,
+    })
+  }, [nodeToSaveDefaults, setNodes, debouncedSave, toast])
+
+  // Add handlers to all nodes
+  useEffect(() => {
+    if (nodes.length > 0) {
+      setNodes((nds) =>
+        nds.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            onUpdateInputs: handleUpdateNodeInputs,
+            onRecalculate: handleRecalculateNode,
+            onSaveDefaults: handleOpenSaveDefaultsDialog,
+          },
+        })),
+      )
+    }
+  }, []) // Empty dependency array to run only once after initial nodes are loaded
+
+  // Return the FlowChart component with all necessary UI elements
   return (
-    <>
-      <div className="h-full w-full" ref={reactFlowWrapper}>
+    <div className="h-full w-full flex flex-col">
+      <FlowchartToolbar
+        onAddModule={() => setIsAddingModule(true)}
+        onManageConnections={() => setIsManagingConnections(true)}
+        onExportCode={() => setIsExportingCode(true)}
+        onSaveFlowchart={handleSaveFlowchart}
+        onResetFlowchart={handleResetFlowchart}
+        onRecalculate={() => recalculate()}
+        onOpenLibrary={() => setIsModuleLibraryOpen(true)}
+        onToggleAutoRecalculate={(enabled) => setAutoRecalculate(enabled)}
+        onOpenSensitivityAnalysis={() => setIsSensitivityAnalysisOpen(true)}
+        onToggleHeatmap={() => setHeatmapEnabled(!heatmapEnabled)}
+        autoRecalculate={autoRecalculate}
+        needsRecalculation={needsRecalculation}
+        heatmapEnabled={heatmapEnabled}
+        lastSaved={lastSavedTime}
+      />
+
+      <div className="flex-1 relative">
         <ReactFlow
-          nodes={nodes}
+          ref={reactFlowWrapper}
+          nodes={heatmapEnabled ? nodesWithHeatmap() : nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -675,257 +947,23 @@ function FlowChart() {
           onNodeClick={onNodeClick}
           nodeTypes={nodeTypes}
           fitView
-          snapToGrid
-          snapGrid={[15, 15]}
-          onInit={(instance) => {
-            if (reactFlowWrapper.current) {
-              reactFlowWrapper.current.reactFlowInstance = instance
-            }
-          }}
-          defaultEdgeOptions={{
-            animated: true,
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-            },
-          }}
         >
+          <Background />
           <Controls />
-          <MiniMap
-            nodeStrokeColor={(n) => {
-              switch (n.data.type) {
-                case "input":
-                  return "#3b82f6"
-                case "output":
-                  return "#e11d48"
-                case "math":
-                  return "#22c55e"
-                case "filter":
-                  return "#f59e0b"
-                default:
-                  return "#94a3b8"
-              }
-            }}
-            nodeColor={(n) => {
-              if (n.data.isUserAdded || n.data.isFromLibrary) {
-                return "#f0f9ff" // Light blue background for user-added modules
-              }
+          <MiniMap />
 
-              switch (n.data.type) {
-                case "input":
-                  return "#dbeafe"
-                case "output":
-                  return "#ffe4e6"
-                case "math":
-                  return "#dcfce7"
-                case "filter":
-                  return "#fef3c7"
-                default:
-                  return "#f1f5f9"
-              }
-            }}
-          />
-          <Background variant="dots" gap={12} size={1} />
-
-          {/* Legend for module colors */}
-          <Panel position="bottom-left" className="bg-white p-2 rounded-md shadow-sm">
-            <div className="flex items-center gap-2 text-xs">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center gap-1">
-                      <div className="w-3 h-3 rounded-sm border-2 border-blue-400 bg-blue-50"></div>
-                      <span>User-added</span>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Modules you have added to the flowchart</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <span className="text-gray-300">|</span>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-sm bg-blue-100"></div>
-                <span>Input</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-sm bg-green-100"></div>
-                <span>Math</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-sm bg-amber-100"></div>
-                <span>Filter</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-3 h-3 rounded-sm bg-rose-100"></div>
-                <span>Output</span>
-              </div>
-            </div>
-          </Panel>
-
-          {/* Top panel with auto-recalculate toggle */}
-          <Panel position="top-left" className="flex items-center gap-2 bg-white p-2 rounded-md shadow-sm">
-            <div className="flex items-center space-x-2">
-              <Switch id="auto-recalculate" checked={autoRecalculate} onCheckedChange={handleAutoRecalculateChange} />
-              <Label htmlFor="auto-recalculate" className="text-sm">
-                Auto-recalculate
-              </Label>
-            </div>
-
-            {!autoRecalculate && (
-              <Button
-                variant={needsRecalculation ? "default" : "outline"}
-                size="sm"
-                className="gap-1"
-                onClick={recalculate}
-                disabled={isRecalculatingRef.current}
-              >
-                <RefreshCw className={`h-4 w-4 ${isRecalculatingRef.current ? "animate-spin" : ""}`} />
-                Recalculate
-                {needsRecalculation && <span className="ml-1 bg-red-500 rounded-full w-2 h-2"></span>}
-              </Button>
-            )}
-          </Panel>
-
-          {/* Right panel with actions */}
-          <Panel position="top-right" className="flex gap-2">
-            <Dialog open={isAddingModule} onOpenChange={setIsAddingModule}>
-              <DialogTrigger asChild>
-                <Button variant="outline" className="gap-2">
-                  <Plus className="h-4 w-4" /> Add Module
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[600px]">
-                <DialogHeader>
-                  <DialogTitle>Add New Module</DialogTitle>
-                </DialogHeader>
-
-                <Tabs value={activeTab} onValueChange={setActiveTab}>
-                  <TabsList className="grid grid-cols-3">
-                    <TabsTrigger value="basic">Basic Info</TabsTrigger>
-                    <TabsTrigger value="inputs">Inputs</TabsTrigger>
-                    <TabsTrigger value="formula">Formula</TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="basic" className="space-y-4 mt-4">
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="module-name" className="text-right">
-                        Name
-                      </Label>
-                      <Input
-                        id="module-name"
-                        value={newModuleName}
-                        onChange={(e) => setNewModuleName(e.target.value)}
-                        className="col-span-3"
-                      />
-                    </div>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                      <Label htmlFor="module-type" className="text-right">
-                        Type
-                      </Label>
-                      <Select value={newModuleType} onValueChange={setNewModuleType}>
-                        <SelectTrigger className="col-span-3">
-                          <SelectValue placeholder="Select module type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="input">Input</SelectItem>
-                          <SelectItem value="math">Math</SelectItem>
-                          <SelectItem value="logic">Logic</SelectItem>
-                          <SelectItem value="transform">Transform</SelectItem>
-                          <SelectItem value="filter">Filter</SelectItem>
-                          <SelectItem value="output">Output</SelectItem>
-                          <SelectItem value="custom">Custom</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid grid-cols-4 items-start gap-4">
-                      <Label htmlFor="module-description" className="text-right pt-2">
-                        Description
-                      </Label>
-                      <Textarea
-                        id="module-description"
-                        value={newModuleDescription}
-                        onChange={(e) => setNewModuleDescription(e.target.value)}
-                        placeholder="Describe what this module does"
-                        className="col-span-3"
-                        rows={3}
-                      />
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="inputs" className="space-y-4 mt-4">
-                    <InputManager inputs={newModuleInputs} onChange={setNewModuleInputs} />
-                  </TabsContent>
-
-                  <TabsContent value="formula" className="space-y-4 mt-4">
-                    <FormulaBuilder
-                      inputs={newModuleInputs}
-                      initialFormula={newModuleFormula}
-                      functionCode={newModuleFunctionCode}
-                      onChange={handleFormulaChange}
-                    />
-                  </TabsContent>
-                </Tabs>
-
-                <div className="flex justify-between mt-4">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      if (activeTab === "basic") {
-                        setIsAddingModule(false)
-                      } else if (activeTab === "inputs") {
-                        setActiveTab("basic")
-                      } else if (activeTab === "formula") {
-                        setActiveTab("inputs")
-                      }
-                    }}
-                  >
-                    {activeTab === "basic" ? "Cancel" : "Back"}
-                  </Button>
-
-                  <Button
-                    onClick={() => {
-                      if (activeTab === "basic") {
-                        setActiveTab("inputs")
-                      } else if (activeTab === "inputs") {
-                        setActiveTab("formula")
-                      } else if (activeTab === "formula") {
-                        handleAddModule()
-                      }
-                    }}
-                  >
-                    {activeTab === "formula" ? "Add Module" : "Next"}
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-
-            <Button variant="outline" className="gap-2" onClick={() => setIsModuleLibraryOpen(true)}>
-              <Library className="h-4 w-4" /> Module Library
-            </Button>
-
-            <Button variant="outline" className="gap-2" onClick={() => setIsManagingConnections(true)}>
-              <Link className="h-4 w-4" /> Connections
-            </Button>
-
-            <Button variant="outline" className="gap-2" onClick={() => setIsExportingCode(true)}>
-              <Code className="h-4 w-4" /> Export Code
-            </Button>
-
-            <Button variant="outline" className="gap-2" onClick={handleSaveFlowchart}>
-              <Save className="h-4 w-4" /> Save
-            </Button>
-
-            <Button variant="outline" className="gap-2" onClick={handleResetFlowchart}>
-              <RotateCcw className="h-4 w-4" /> Reset
-            </Button>
-
-            <Button variant="outline" className="gap-2" onClick={fitView}>
-              <ZoomIn className="h-4 w-4" /> Fit View
-            </Button>
-          </Panel>
+          {heatmapEnabled && (
+            <HeatmapLegend
+              onClose={() => setHeatmapEnabled(false)}
+              metric={heatmapMetric}
+              minValue={heatmapMin}
+              maxValue={heatmapMax}
+            />
+          )}
         </ReactFlow>
       </div>
 
+      {/* Module details panel */}
       {selectedNode && (
         <ModuleDetails
           nodeId={selectedNode}
@@ -933,42 +971,142 @@ function FlowChart() {
           edges={edges}
           updateNodeData={updateNodeData}
           onClose={closeDetails}
+          onNodesChange={setNodes}
+          autoRecalculate={autoRecalculate}
         />
       )}
 
-      <ConnectionPanel
-        isOpen={isManagingConnections}
-        onClose={() => setIsManagingConnections(false)}
-        nodes={nodes}
-        edges={edges}
-        onAddConnection={handleAddConnection}
-        onDeleteConnection={handleDeleteConnection}
+      {/* Connection management panel */}
+      {isManagingConnections && (
+        <ConnectionPanel
+          isOpen={isManagingConnections}
+          onClose={() => setIsManagingConnections(false)}
+          nodes={nodes}
+          edges={edges}
+          onAddConnection={handleAddConnection}
+          onDeleteConnection={handleDeleteConnection}
+        />
+      )}
+
+      {/* Code export dialog */}
+      {isExportingCode && (
+        <CodeExportDialog
+          isOpen={isExportingCode}
+          onClose={() => setIsExportingCode(false)}
+          nodes={nodes}
+          edges={edges}
+        />
+      )}
+
+      {/* Module library dialog */}
+      {isModuleLibraryOpen && (
+        <ModuleLibrary
+          isOpen={isModuleLibraryOpen}
+          onClose={() => setIsModuleLibraryOpen(false)}
+          onAddModule={handleAddFromLibrary}
+          currentNodes={nodes}
+        />
+      )}
+
+      {/* Add Module dialog */}
+      <AddModuleDialog
+        isOpen={isAddingModule}
+        onClose={() => setIsAddingModule(false)}
+        onAddModule={handleAddModule}
+        newModuleType={newModuleType}
+        setNewModuleType={setNewModuleType}
+        newModuleName={newModuleName}
+        setNewModuleName={setNewModuleName}
+        newModuleDescription={newModuleDescription}
+        setNewModuleDescription={setNewModuleDescription}
+        newModuleInputs={newModuleInputs}
+        setNewModuleInputs={setNewModuleInputs}
+        newModuleFormula={newModuleFormula}
+        newModuleFunctionCode={newModuleFunctionCode}
+        handleFormulaChange={handleFormulaChange}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
       />
 
-      <CodeExportDialog
-        isOpen={isExportingCode}
-        onClose={() => setIsExportingCode(false)}
-        nodes={nodes}
-        edges={edges}
-      />
+      {/* Sensitivity analysis dashboard */}
+      {isSensitivityAnalysisOpen && (
+        <SensitivityDashboard
+          isOpen={isSensitivityAnalysisOpen}
+          onClose={() => setIsSensitivityAnalysisOpen(false)}
+          nodes={nodes}
+          edges={edges}
+          simulationResults={simulationResults}
+          isSimulating={false}
+          onJumpToNode={(nodeId) => {
+            setSelectedNode(nodeId)
+            setIsSensitivityAnalysisOpen(false)
+          }}
+          onApplyChanges={() => {
+            if (simulationResults) {
+              // Get the input to change
+              const { nodeId, inputName, newValue } = simulationResults.changedInput
 
-      <ModuleLibrary
-        isOpen={isModuleLibraryOpen}
-        onClose={() => setIsModuleLibraryOpen(false)}
-        onAddModule={handleAddFromLibrary}
-        currentNodes={nodes}
-      />
-    </>
+              // Find the node
+              const node = nodes.find((n) => n.id === nodeId)
+              if (!node) return
+
+              // Update the node's input
+              updateNodeData(nodeId, {
+                inputs: {
+                  ...node.data.inputs,
+                  [inputName]: newValue,
+                },
+                needsRecalculation: true,
+              })
+
+              // Close the dashboard
+              setIsSensitivityAnalysisOpen(false)
+
+              // Show a toast notification
+              toast({
+                title: "Changes applied",
+                description: `Updated ${inputName} to ${newValue} and recalculated affected modules`,
+              })
+
+              // Trigger recalculation if auto-recalculate is disabled
+              if (!autoRecalculate) {
+                setTimeout(() => {
+                  recalculate(nodeId)
+                }, 100)
+              }
+            }
+          }}
+        />
+      )}
+
+      {/* Save as default confirmation dialog */}
+      <AlertDialog open={isSaveDefaultConfirmOpen} onOpenChange={setSaveDefaultConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save as Default Values</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will overwrite the current default values for this module. The current input values will become the
+              new defaults. Are you sure?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setNodeToSaveDefaults(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleSaveDefaults}>Save as Default</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   )
 }
 
-// This is the main component that wraps everything with ReactFlowProvider
+// Now add the required default export wrapping the FlowChart component
+// This is what will be imported as ModularFlowchart in the app/page.tsx
+
+// Update the ModularFlowchart component to set a specific height
 export default function ModularFlowchart() {
   return (
-    <div className="h-[calc(100vh-80px)] w-full">
-      <ReactFlowProvider>
-        <FlowChart />
-      </ReactFlowProvider>
+    <div className="w-full h-[calc(100vh-100px)]">
+      <FlowChart />
     </div>
   )
 }

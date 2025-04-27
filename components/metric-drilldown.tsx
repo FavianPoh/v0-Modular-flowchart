@@ -285,7 +285,8 @@ export function MetricDrilldown({
   )
 
   // Perform topological sort to determine execution order
-  const topologicalSort = useCallback((graph: Record<string, string[]>) => {
+  const topologicalSort = useCallback(() => {
+    const graph = buildDependencyGraph(nodes)
     const visited = new Set<string>()
     const temp = new Set<string>()
     const order: string[] = []
@@ -323,7 +324,7 @@ export function MetricDrilldown({
     }
 
     return order
-  }, [])
+  }, [buildDependencyGraph, nodes])
 
   // Run sensitivity analysis on a selected input
   const runSensitivityAnalysis = useCallback(() => {
@@ -384,8 +385,7 @@ export function MetricDrilldown({
         }
 
         // Build dependency graph and get execution order
-        const graph = buildDependencyGraph(clonedNodes)
-        const executionOrder = topologicalSort(graph)
+        const executionOrder = topologicalSort()
 
         // Group edges by target node for efficient lookup
         const edgesByTarget: Record<string, Edge[]> = {}
@@ -414,7 +414,7 @@ export function MetricDrilldown({
           // Skip nodes that don't need recalculation
           if (
             nodeId !== targetNodeId &&
-            !graph[nodeId].some((depId) => affectedNodes.some((n) => n.nodeId === depId))
+            !buildDependencyGraph(clonedNodes)[nodeId].some((depId) => affectedNodes.some((n) => n.nodeId === depId))
           ) {
             continue
           }
@@ -522,6 +522,13 @@ export function MetricDrilldown({
   }, [])
 
   if (!selectedNode) return null
+
+  const applySimulationResults = useCallback(() => {
+    // Implement the logic to apply the simulation results to the actual nodes
+    // This might involve updating the state of the nodes and edges in the parent component
+    console.log("Applying simulation results:", simulationResults)
+    // onClose(); // Close the dialog after applying changes, if desired
+  }, [simulationResults])
 
   return (
     <>
@@ -861,6 +868,7 @@ export function MetricDrilldown({
         simulationResults={simulationResults}
         isSimulating={isSimulating}
         onJumpToNode={onJumpToNode}
+        onApplyChanges={applySimulationResults}
       />
     </>
   )

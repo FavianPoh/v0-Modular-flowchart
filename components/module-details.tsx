@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { executeModule } from "@/lib/module-utils"
-import { RotateCcw, Code, Settings, Activity, Info, ArrowRight, RefreshCw, FileText, Sliders } from "lucide-react"
+import { executeModule } from "@/lib/recalculation-utils"
+import { RotateCcw, Code, Settings, Activity, Info, ArrowRight, RefreshCw, FileText, Sliders, Save } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { InputManager } from "@/components/input-manager"
 import { FormulaBuilder } from "@/components/formula-builder"
@@ -19,6 +19,18 @@ import { Slider } from "@/components/ui/slider"
 import { SensitivityDashboard, type SimulationResult } from "@/components/sensitivity-dashboard"
 import type { Edge } from "reactflow"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { recalculateFlowchart, findDependentNodes } from "@/lib/recalculation-utils"
+import { useToast } from "@/components/ui/use-toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface ModuleDetailsProps {
   nodeId: string
@@ -26,9 +38,19 @@ interface ModuleDetailsProps {
   edges: any[]
   updateNodeData: (nodeId: string, any) => void
   onClose: () => void
+  onNodesChange: (nodes: any[]) => void
+  autoRecalculate: boolean
 }
 
-export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }: ModuleDetailsProps) {
+export function ModuleDetails({
+  nodeId,
+  nodes,
+  edges,
+  updateNodeData,
+  onClose,
+  onNodesChange,
+  autoRecalculate,
+}: ModuleDetailsProps) {
   const node = nodes.find((n) => n.id === nodeId)
   const [inputs, setInputs] = useState<Record<string, any>>({})
   const [functionCode, setFunctionCode] = useState("")
@@ -43,6 +65,11 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
   const [isSimulating, setIsSimulating] = useState(false)
   const [simulationResults, setSimulationResults] = useState<SimulationResult | null>(null)
   const [isDashboardOpen, setIsDashboardOpen] = useState(false)
+  const [isSaveDefaultConfirmOpen, setSaveDefaultConfirmOpen] = useState(false)
+  const [inputValuesModified, setInputValuesModified] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [isUnsavedChangesDialogOpen, setIsUnsavedChangesDialogOpen] = useState(false)
+  const { toast } = useToast()
 
   // Refs to prevent update loops
   const isUpdatingRef = useRef(false)
@@ -50,6 +77,11 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
   const nodeIdRef = useRef<string | null>(nodeId)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastFunctionCodeRef = useRef<string>("")
+  const originalInputsRef = useRef<Record<string, any>>({})
+  const originalOutputsRef = useRef<Record<string, any>>({})
+
+  // Define refs for conditional logic
+  const triggerFullRecalculationRef = useRef<() => void>(() => {})
 
   // Create refs outside the conditional block
   const debouncedUpdateNodeDataRef = useRef<(data: any) => void>(() => {})
@@ -58,6 +90,8 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
   const handleCodeChangeRef = useRef<(e: React.ChangeEvent<HTMLTextAreaElement>) => void>(() => {})
   const resetInputsRef = useRef<() => void>(() => {})
   const runSensitivityAnalysisRef = useRef<() => void>(() => {})
+  const applySimulationResultsRef = useRef<() => void>(() => {})
+  const saveAsDefaultRef = useRef<() => void>(() => {})
 
   // Find connected nodes (both incoming and outgoing)
   const connectedNodes = nodes.filter((n) => {
@@ -83,6 +117,49 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
     return isConnected
   })
 
+  // Compare current inputs with default inputs to check if values have been modified
+  useEffect(() => {
+    if (node && node.data.defaultInputs) {
+      const defaultInputs = node.data.defaultInputs
+      const currentInputs = inputs
+
+      // Debug logging
+      console.log("Comparing inputs:", currentInputs, "with defaults:", defaultInputs)
+
+      const isModified = Object.keys(currentInputs).some((key) => {
+        // Check if values are different
+        if (typeof currentInputs[key] === "number" && typeof defaultInputs[key] === "number") {
+          // For numbers, compare with a small epsilon to account for floating point errors
+          const diff = Math.abs(currentInputs[key] - defaultInputs[key])
+          const isChanged = diff > 0.000001
+          if (isChanged) {
+            console.log(`Input ${key} changed: ${defaultInputs[key]} -> ${currentInputs[key]}`)
+          }
+          return isChanged
+        }
+
+        const isDifferent = JSON.stringify(currentInputs[key]) !== JSON.stringify(defaultInputs[key])
+        if (isDifferent) {
+          console.log(`Input ${key} changed: ${defaultInputs[key]} -> ${currentInputs[key]}`)
+        }
+        return isDifferent
+      })
+
+      console.log("Inputs modified:", isModified)
+      setInputValuesModified(isModified)
+    }
+  }, [inputs, node])
+
+  // Check for unsaved changes
+  useEffect(() => {
+    if (!initializedRef.current) return
+
+    const inputsChanged = JSON.stringify(inputs) !== JSON.stringify(originalInputsRef.current)
+    const codeChanged = functionCode !== lastFunctionCodeRef.current
+
+    setHasUnsavedChanges(inputsChanged || codeChanged)
+  }, [inputs, functionCode])
+
   // Reset state when nodeId changes
   useEffect(() => {
     // Clear any pending timeouts
@@ -102,6 +179,7 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       setNeedsRecalculation(false)
       setInitialFormula("")
       lastFunctionCodeRef.current = ""
+      setHasUnsavedChanges(false)
     }
   }, [nodeId])
 
@@ -115,11 +193,18 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         initializedRef.current = true
 
         // Set initial state from node data
-        setInputs({ ...node.data.inputs })
+        const nodeInputs = { ...node.data.inputs }
+        const nodeOutputs = executeModule(node.data)
+
+        setInputs(nodeInputs)
         setFunctionCode(node.data.functionCode || "")
-        setOutputs(executeModule(node.data))
+        setOutputs(nodeOutputs)
         setNeedsRecalculation(node.data.needsRecalculation || false)
         lastFunctionCodeRef.current = node.data.functionCode || ""
+
+        // Store original values for change detection
+        originalInputsRef.current = { ...nodeInputs }
+        originalOutputsRef.current = { ...nodeOutputs }
 
         // Extract formula from functionCode - only once
         if (node.data.functionCode) {
@@ -140,6 +225,34 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
     }
   }, [node])
 
+  // Function to trigger a full flowchart recalculation
+  const triggerFullRecalculation = useCallback(() => {
+    triggerFullRecalculationRef.current()
+  }, [])
+
+  useEffect(() => {
+    triggerFullRecalculationRef.current = () => {
+      // Use setTimeout to completely break out of the render cycle
+      setTimeout(() => {
+        try {
+          // Always perform the full recalculation regardless of autoRecalculate setting
+          console.log("Triggering full recalculation")
+          const updatedNodes = recalculateFlowchart(nodes, edges)
+
+          // Update the nodes in the parent component
+          if (updatedNodes !== nodes) {
+            console.log("Nodes updated after recalculation")
+            onNodesChange(updatedNodes)
+          } else {
+            console.log("No nodes changed during recalculation")
+          }
+        } catch (error) {
+          console.error("Error during recalculation:", error)
+        }
+      }, 0)
+    }
+  }, [nodes, edges, onNodesChange])
+
   // Debounced function to update node data
   const _debouncedUpdateNodeData = useRef<(data: any) => void>(() => {})
 
@@ -153,6 +266,7 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         if (!isUpdatingRef.current) {
           try {
             isUpdatingRef.current = true
+            console.log("Updating node data:", nodeId, data)
             updateNodeData(nodeId, data)
 
             // Reset flag after a delay to ensure we don't trigger another update too soon
@@ -164,7 +278,7 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
             isUpdatingRef.current = false
           }
         }
-      }, 300)
+      }, 50) // Reduced timeout for faster response
     }
   }, [nodeId, updateNodeData])
 
@@ -178,23 +292,40 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
     _handleInputChange.current = (newInputs: Record<string, any>) => {
       if (isUpdatingRef.current) return
 
+      console.log("Input change detected:", newInputs)
+
       // Update local state immediately
       setInputs(newInputs)
 
-      // Debounce the node data update
-      debouncedUpdateNodeData({
-        inputs: newInputs,
-        defaultInputs: newInputs,
-        needsRecalculation: true,
-      })
+      // Mark as having unsaved changes
+      setHasUnsavedChanges(true)
 
-      // Recalculate outputs for this node only
-      if (node) {
-        const updatedNode = { ...node, data: { ...node.data, inputs: newInputs } }
-        setOutputs(executeModule(updatedNode.data))
+      if (!node || !node.data.function) {
+        console.error("Node or node function is missing")
+        return
+      }
+
+      try {
+        // Execute the function with new inputs to get updated outputs
+        const updatedNode = {
+          ...node,
+          data: {
+            ...node.data,
+            inputs: newInputs,
+          },
+        }
+
+        // Calculate new outputs
+        const newOutputs = executeModule(updatedNode.data)
+        console.log("New outputs calculated:", newOutputs)
+
+        // Update local outputs state
+        setOutputs(newOutputs)
+      } catch (error) {
+        console.error("Error processing input change:", error)
       }
     }
-  }, [node, debouncedUpdateNodeData])
+  }, [node])
 
   const handleInputChange = useCallback((newInputs: Record<string, any>) => {
     _handleInputChange.current?.(newInputs)
@@ -213,16 +344,12 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       setFunctionCode(code)
       lastFunctionCodeRef.current = code
 
+      // Mark as having unsaved changes
+      setHasUnsavedChanges(true)
+
       try {
         // Create a new function from the code
         const newFunction = new Function("inputs", code)
-
-        // Debounce the node data update
-        debouncedUpdateNodeData({
-          function: newFunction,
-          functionCode: code,
-          needsRecalculation: true,
-        })
 
         // Recalculate outputs
         if (node) {
@@ -240,7 +367,7 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         console.error("Error creating function:", error)
       }
     }
-  }, [node, debouncedUpdateNodeData])
+  }, [node])
 
   const handleFunctionCodeChange = useCallback((formula: string, code: string) => {
     _handleFunctionCodeChange.current?.(formula, code)
@@ -261,16 +388,12 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       setFunctionCode(code)
       lastFunctionCodeRef.current = code
 
+      // Mark as having unsaved changes
+      setHasUnsavedChanges(true)
+
       try {
         // Create a new function from the code
         const newFunction = new Function("inputs", code)
-
-        // Debounce the node data update
-        debouncedUpdateNodeData({
-          function: newFunction,
-          functionCode: code,
-          needsRecalculation: true,
-        })
 
         // Recalculate outputs
         if (node) {
@@ -288,7 +411,7 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         console.error("Error creating function:", error)
       }
     }
-  }, [node, debouncedUpdateNodeData])
+  }, [node])
 
   const handleCodeChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     _handleCodeChange.current?.(e)
@@ -303,11 +426,8 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       // Update local state
       setInputs({ ...node.data.defaultInputs })
 
-      // Debounce the node data update
-      debouncedUpdateNodeData({
-        inputs: { ...node.data.defaultInputs },
-        needsRecalculation: true,
-      })
+      // Mark as having unsaved changes
+      setHasUnsavedChanges(true)
 
       // Recalculate outputs
       const updatedNode = {
@@ -318,12 +438,46 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         },
       }
       setOutputs(executeModule(updatedNode.data))
+
+      toast({
+        title: "Inputs reset",
+        description: "Module inputs have been reset to default values",
+        duration: 2000,
+      })
     }
-  }, [node, debouncedUpdateNodeData])
+  }, [node, toast])
 
   const resetInputs = useCallback(() => {
     _resetInputs.current?.()
   }, [])
+
+  // Save current inputs as default values
+  const saveAsDefault = useCallback(() => {
+    if (!node || isUpdatingRef.current) return
+
+    console.log("Saving current inputs as defaults:", inputs)
+
+    // Update node data with new default inputs
+    debouncedUpdateNodeData({
+      defaultInputs: { ...inputs },
+    })
+
+    // Update the node directly for immediate feedback
+    updateNodeData(nodeId, {
+      defaultInputs: { ...inputs },
+    })
+
+    // Clear the modified flag since inputs now match defaults
+    setInputValuesModified(false)
+
+    toast({
+      title: "Default values saved",
+      description: "Current input values are now the default for this module",
+      duration: 3000,
+    })
+
+    setSaveDefaultConfirmOpen(false)
+  }, [node, inputs, debouncedUpdateNodeData, updateNodeData, nodeId, toast])
 
   // Generate a plain English explanation of what the code does
   const generateExplanation = (code: string) => {
@@ -385,6 +539,44 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
     setIsMetricDrilldownOpen(true)
   }
 
+  // Apply simulation results to the actual module
+  const _applySimulationResults = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    _applySimulationResults.current = () => {
+      if (!simulationResults || !node) return
+
+      // Get the input to change
+      const { inputName, newValue } = simulationResults.changedInput
+
+      // Create a new inputs object with the updated value
+      const updatedInputs = {
+        ...inputs,
+        [inputName]: newValue,
+      }
+
+      // Update the local state
+      setInputs(updatedInputs)
+
+      // Update the node data and trigger recalculation
+      debouncedUpdateNodeData({
+        inputs: updatedInputs,
+        needsRecalculation: true,
+      })
+
+      setIsDashboardOpen(false)
+
+      toast({
+        title: "Changes applied",
+        description: `Updated ${inputName} to ${newValue}`,
+      })
+    }
+  }, [simulationResults, node, inputs, debouncedUpdateNodeData, toast])
+
+  const applySimulationResults = useCallback(() => {
+    _applySimulationResults.current?.()
+  }, [])
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -393,6 +585,135 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       }
     }
   }, [])
+
+  // Save changes and close
+  const saveAndClose = useCallback(() => {
+    if (!node) return
+
+    console.log("Saving changes before closing:", { inputs, functionCode, outputs })
+
+    try {
+      // Create a new function from the code if it changed
+      let newFunction = node.data.function
+      if (functionCode !== node.data.functionCode) {
+        newFunction = new Function("inputs", functionCode)
+      }
+
+      // Update the node data with all changes
+      updateNodeData(nodeId, {
+        inputs: inputs,
+        outputs: outputs,
+        function: newFunction,
+        functionCode: functionCode,
+        needsRecalculation: false,
+      })
+
+      // Find dependent nodes that need to be updated
+      const dependentNodeIds = findDependentNodes(nodeId, nodes, edges)
+      console.log("Dependent nodes:", dependentNodeIds)
+
+      if (dependentNodeIds.length > 0) {
+        // Force immediate recalculation of the entire flowchart
+        setTimeout(() => {
+          triggerFullRecalculation()
+        }, 100)
+      }
+
+      // Reset unsaved changes flag
+      setHasUnsavedChanges(false)
+
+      // Close the panel
+      onClose()
+
+      toast({
+        title: "Changes saved",
+        description: "Module changes have been saved and propagated",
+        duration: 2000,
+      })
+    } catch (error) {
+      console.error("Error saving changes:", error)
+      toast({
+        title: "Error saving changes",
+        description: "There was a problem saving your changes",
+        variant: "destructive",
+      })
+    }
+  }, [
+    node,
+    nodeId,
+    inputs,
+    functionCode,
+    outputs,
+    updateNodeData,
+    nodes,
+    edges,
+    triggerFullRecalculation,
+    onClose,
+    toast,
+  ])
+
+  // Handle close with unsaved changes check
+  const handleClose = useCallback(() => {
+    if (hasUnsavedChanges) {
+      setIsUnsavedChangesDialogOpen(true)
+    } else {
+      onClose()
+    }
+  }, [hasUnsavedChanges, onClose])
+
+  // Fixed recalculate function
+  const recalculateModule = useCallback(() => {
+    if (!node) return
+
+    console.log("Manually recalculating module:", nodeId)
+
+    try {
+      // Create a new function from the code if it changed
+      let newFunction = node.data.function
+      if (functionCode !== node.data.functionCode) {
+        newFunction = new Function("inputs", functionCode)
+      }
+
+      // Create updated node with current inputs and function
+      const updatedNode = {
+        ...node,
+        data: {
+          ...node.data,
+          inputs: inputs,
+          function: newFunction,
+          functionCode: functionCode,
+        },
+      }
+
+      // Calculate new outputs
+      const newOutputs = executeModule(updatedNode.data)
+      console.log("Recalculation produced outputs:", newOutputs)
+
+      // Update local state
+      setOutputs(newOutputs)
+
+      // Update the node data
+      updateNodeData(nodeId, {
+        outputs: newOutputs,
+        function: newFunction,
+        functionCode: functionCode,
+        needsRecalculation: false,
+      })
+
+      toast({
+        title: "Module recalculated",
+        description: "Module outputs have been updated",
+        duration: 2000,
+      })
+    } catch (error) {
+      console.error("Error recalculating module:", error)
+      toast({
+        title: "Recalculation failed",
+        description: "There was a problem recalculating the module",
+        variant: "destructive",
+      })
+    }
+  }, [node, nodeId, inputs, functionCode, updateNodeData, toast])
 
   if (!node) return null
 
@@ -615,9 +936,59 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
     _runSensitivityAnalysis.current?.()
   }, [])
 
+  // Function to manually apply changes and force recalculation
+  const applyAndPropagate = useCallback(() => {
+    if (!node) return
+
+    console.log("Manually applying changes and propagating")
+
+    try {
+      // Calculate new outputs based on current inputs
+      const newOutputs = executeModule({
+        ...node.data,
+        inputs: inputs,
+        function: functionCode !== node.data.functionCode ? new Function("inputs", functionCode) : node.data.function,
+      })
+
+      console.log("Calculated new outputs:", newOutputs)
+
+      // Update local state
+      setOutputs(newOutputs)
+
+      // Update the node with new inputs, outputs, and function
+      updateNodeData(nodeId, {
+        inputs: inputs,
+        outputs: newOutputs,
+        function: functionCode !== node.data.functionCode ? new Function("inputs", functionCode) : node.data.function,
+        functionCode: functionCode,
+        needsRecalculation: false,
+      })
+
+      // Force recalculation of the entire flowchart
+      setTimeout(() => {
+        triggerFullRecalculation()
+      }, 100)
+
+      // Reset unsaved changes flag
+      setHasUnsavedChanges(false)
+
+      toast({
+        title: "Changes applied",
+        description: "Values have been updated and propagated through the flowchart",
+      })
+    } catch (error) {
+      console.error("Error applying changes:", error)
+      toast({
+        title: "Error applying changes",
+        description: "There was a problem updating the module",
+        variant: "destructive",
+      })
+    }
+  }, [node, nodeId, inputs, functionCode, updateNodeData, triggerFullRecalculation, toast])
+
   return (
     <>
-      <Sheet open={!!nodeId} onOpenChange={(open) => !open && onClose()}>
+      <Sheet open={!!nodeId} onOpenChange={handleClose}>
         <SheetContent className="w-[400px] sm:w-[600px] overflow-y-auto">
           <SheetHeader>
             <div className="flex items-center gap-2">
@@ -635,9 +1006,23 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
                   <RefreshCw className="h-3 w-3" /> Needs recalculation
                 </Badge>
               )}
+              {hasUnsavedChanges && (
+                <Badge variant="outline" className="bg-blue-100 text-blue-700 flex items-center gap-1">
+                  <Save className="h-3 w-3" /> Unsaved changes
+                </Badge>
+              )}
             </div>
             <SheetDescription>{node.data.description}</SheetDescription>
           </SheetHeader>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Button variant="default" onClick={saveAndClose} disabled={!hasUnsavedChanges}>
+              Save & Close
+            </Button>
+          </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
             <TabsList className="grid grid-cols-5">
@@ -736,12 +1121,43 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
             <TabsContent value="inputs" className="space-y-4 mt-4">
               <div className="flex justify-between">
                 <h3 className="text-sm font-medium">Module Inputs</h3>
-                <Button variant="outline" size="sm" onClick={resetInputs} className="flex items-center gap-2">
-                  <RotateCcw className="h-3 w-3" /> Reset
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={resetInputs} className="flex items-center gap-2">
+                    <RotateCcw className="h-3 w-3" /> Reset
+                  </Button>
+                  <Button
+                    variant={inputValuesModified ? "secondary" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      console.log("Save as Default clicked, modified:", inputValuesModified)
+                      if (inputValuesModified) {
+                        setSaveDefaultConfirmOpen(true)
+                      } else {
+                        toast({
+                          title: "No changes to save",
+                          description: "Current values already match the defaults",
+                          duration: 2000,
+                        })
+                      }
+                    }}
+                    disabled={!inputValuesModified}
+                    className={`flex items-center gap-2 ${inputValuesModified ? "bg-blue-100 hover:bg-blue-200 text-blue-800" : ""}`}
+                  >
+                    <Save className="h-3 w-3" /> Save as Default
+                    {inputValuesModified && <span className="h-2 w-2 rounded-full bg-blue-500 ml-1"></span>}
+                  </Button>
+                  <Button variant="default" size="sm" onClick={applyAndPropagate} className="flex items-center gap-2">
+                    <RefreshCw className="h-3 w-3" /> Apply & Propagate
+                  </Button>
+                </div>
               </div>
 
-              <InputManager inputs={inputs} onChange={handleInputChange} />
+              <InputManager
+                inputs={inputs}
+                onChange={handleInputChange}
+                defaultInputs={node.data.defaultInputs}
+                showModifiedIndicator={true}
+              />
 
               <div className="border-t pt-4 mt-4">
                 <h3 className="text-sm font-medium mb-3">Sensitivity Analysis</h3>
@@ -866,12 +1282,7 @@ return {
             <TabsContent value="outputs" className="space-y-4 mt-4">
               <div className="flex justify-between mb-4">
                 <h3 className="text-sm font-medium">Module Outputs</h3>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setOutputs(executeModule(node.data))}
-                  className="flex items-center gap-2"
-                >
+                <Button variant="outline" size="sm" onClick={recalculateModule} className="flex items-center gap-2">
                   <RefreshCw className="h-3 w-3" /> Recalculate
                 </Button>
               </div>
@@ -945,8 +1356,64 @@ return {
               </Card>
             </TabsContent>
           </Tabs>
+
+          <div className="flex justify-end gap-2 mt-6 border-t pt-4">
+            <Button variant="outline" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Button variant="default" onClick={saveAndClose} disabled={!hasUnsavedChanges}>
+              Save & Close
+            </Button>
+          </div>
         </SheetContent>
       </Sheet>
+
+      {/* Save as default confirmation dialog */}
+      <AlertDialog open={isSaveDefaultConfirmOpen} onOpenChange={setSaveDefaultConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save as Default Values</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will overwrite the current default values for this module. The current input values will become the
+              new defaults. Are you sure?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={saveAsDefault}>Save as Default</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Unsaved changes dialog */}
+      <AlertDialog open={isUnsavedChangesDialogOpen} onOpenChange={setIsUnsavedChangesDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have unsaved changes. Would you like to save them before closing?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setIsUnsavedChangesDialogOpen(false)
+                onClose()
+              }}
+            >
+              Discard Changes
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setIsUnsavedChangesDialogOpen(false)
+                saveAndClose()
+              }}
+            >
+              Save & Close
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <MetricDrilldown
         isOpen={isMetricDrilldownOpen}
@@ -967,6 +1434,7 @@ return {
         }}
       />
 
+      {/* Sensitivity analysis dashboard */}
       <SensitivityDashboard
         isOpen={isDashboardOpen}
         onClose={() => setIsDashboardOpen(false)}
@@ -984,6 +1452,7 @@ return {
             document.dispatchEvent(event)
           }, 100)
         }}
+        onApplyChanges={applySimulationResults}
       />
     </>
   )

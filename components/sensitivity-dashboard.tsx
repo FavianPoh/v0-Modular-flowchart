@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { ArrowRight, ExternalLink, RefreshCw, ArrowDown } from "lucide-react"
+import { ArrowRight, ExternalLink, RefreshCw, ArrowDown, Save } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import type { Node, Edge } from "reactflow"
 
@@ -18,6 +18,7 @@ interface SensitivityDashboardProps {
   simulationResults: SimulationResult | null
   isSimulating: boolean
   onJumpToNode?: (nodeId: string) => void
+  onApplyChanges?: () => void
 }
 
 export interface SimulationResult {
@@ -35,6 +36,7 @@ export interface SimulationResult {
     originalOutputs: Record<string, any>
     newOutputs: Record<string, any>
     isTarget?: boolean
+    impactChain?: string[] // Added to track impact chain
   }[]
   targetMetric?: {
     nodeId: string
@@ -44,6 +46,11 @@ export interface SimulationResult {
     newValue: any
     percentChange: number
   }
+  impactChains?: {
+    path: string[]
+    metrics: string[]
+    percentChanges: number[]
+  }[] // Added to store impact chains
 }
 
 export function SensitivityDashboard({
@@ -54,6 +61,7 @@ export function SensitivityDashboard({
   simulationResults,
   isSimulating,
   onJumpToNode,
+  onApplyChanges,
 }: SensitivityDashboardProps) {
   const [activeTab, setActiveTab] = useState("overview")
 
@@ -107,6 +115,100 @@ export function SensitivityDashboard({
     return { value: change, percent: percentChange }
   }
 
+  // Build impact chains from affected nodes
+  const buildImpactChains = () => {
+    if (!simulationResults) return []
+
+    // Create a map of node ID to node data for quick lookup
+    const nodeMap = new Map(nodes.map((node) => [node.id, node]))
+
+    // Create a map of edges by source node
+    const edgesBySource: Record<string, Edge[]> = {}
+    edges.forEach((edge) => {
+      if (!edgesBySource[edge.source]) {
+        edgesBySource[edge.source] = []
+      }
+      edgesBySource[edge.source].push(edge)
+    })
+
+    // Start with the changed input node
+    const startNodeId = simulationResults.changedInput.nodeId
+    const chains: { path: string[]; metrics: string[]; percentChanges: number[] }[] = []
+
+    // Function to recursively build chains
+    const buildChain = (
+      nodeId: string,
+      currentPath: string[] = [],
+      currentMetrics: string[] = [],
+      currentChanges: number[] = [],
+    ) => {
+      const node = nodeMap.get(nodeId)
+      if (!node) return
+
+      // Add this node to the current path
+      const newPath = [...currentPath, node.data.label]
+
+      // Find affected node data for this node
+      const affectedNode = simulationResults.affectedNodes.find((n) => n.nodeId === nodeId)
+
+      if (affectedNode) {
+        // For each changed output in this node
+        Object.entries(affectedNode.newOutputs).forEach(([metricName, newValue]) => {
+          const originalValue = affectedNode.originalOutputs[metricName]
+          const change = calculateChange(originalValue, newValue)
+
+          if (Math.abs(change.percent) > 0.01) {
+            // Only consider significant changes
+            const newMetrics = [...currentMetrics, `${node.data.label}.${metricName}`]
+            const newChanges = [...currentChanges, change.percent]
+
+            // Find outgoing edges from this node for this metric
+            const outgoingEdges = edgesBySource[nodeId] || []
+            const relevantEdges = outgoingEdges.filter((edge) => edge.sourceHandle === `output-${metricName}`)
+
+            if (relevantEdges.length > 0) {
+              // Continue the chain for each target node
+              relevantEdges.forEach((edge) => {
+                buildChain(edge.target, newPath, newMetrics, newChanges)
+              })
+            } else {
+              // This is a terminal node in the chain
+              chains.push({
+                path: newPath,
+                metrics: newMetrics,
+                percentChanges: newChanges,
+              })
+            }
+          }
+        })
+      } else if (nodeId === startNodeId) {
+        // This is the starting node, continue with its outgoing edges
+        const outgoingEdges = edgesBySource[nodeId] || []
+        outgoingEdges.forEach((edge) => {
+          const metricName = edge.sourceHandle?.replace("output-", "")
+          if (metricName) {
+            buildChain(
+              edge.target,
+              [node.data.label],
+              [`${node.data.label}.${metricName}`],
+              [0], // No change percentage for the starting node
+            )
+          }
+        })
+      }
+    }
+
+    // Start building chains from the input node
+    buildChain(startNodeId)
+
+    // Sort chains by impact (using the last percentage change in each chain)
+    return chains.sort((a, b) => {
+      const lastChangeA = Math.abs(a.percentChanges[a.percentChanges.length - 1] || 0)
+      const lastChangeB = Math.abs(b.percentChanges[b.percentChanges.length - 1] || 0)
+      return lastChangeB - lastChangeA
+    })
+  }
+
   if (!simulationResults && !isSimulating) {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -121,6 +223,9 @@ export function SensitivityDashboard({
       </Dialog>
     )
   }
+
+  // Build impact chains when we have simulation results
+  const impactChains = simulationResults ? buildImpactChains() : []
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -138,8 +243,9 @@ export function SensitivityDashboard({
         ) : (
           simulationResults && (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-              <TabsList className="grid grid-cols-2">
+              <TabsList className="grid grid-cols-3">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="propagation">Propagation Chains</TabsTrigger>
                 <TabsTrigger value="details">Detailed Changes</TabsTrigger>
               </TabsList>
 
@@ -249,51 +355,100 @@ export function SensitivityDashboard({
 
                   <Card>
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Propagation Summary</CardTitle>
+                      <CardTitle className="text-base">Summary</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="flex flex-col items-center gap-2 py-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="bg-blue-50 text-blue-700">
-                            {simulationResults.changedInput.nodeName}
-                          </Badge>
-                          <span className="font-mono text-sm">{simulationResults.changedInput.inputName}</span>
-                        </div>
-                        <ArrowDown className="h-5 w-5 text-muted-foreground" />
-                        <div className="flex flex-wrap justify-center gap-2 max-w-[500px]">
-                          {simulationResults.affectedNodes
-                            .filter((node) => !node.isTarget)
-                            .slice(0, 3)
-                            .map((node, index) => (
-                              <Badge key={index} variant="outline" className={getTypeColor(node.nodeType)}>
-                                {node.nodeName}
-                              </Badge>
-                            ))}
-                          {simulationResults.affectedNodes.filter((node) => !node.isTarget).length > 3 && (
-                            <Badge variant="outline">
-                              +{simulationResults.affectedNodes.filter((node) => !node.isTarget).length - 3} more
-                            </Badge>
-                          )}
-                        </div>
-                        <ArrowDown className="h-5 w-5 text-muted-foreground" />
-                        {simulationResults.targetMetric && (
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="bg-purple-50 text-purple-700">
-                              {simulationResults.targetMetric.nodeName}
-                            </Badge>
-                            <span className="font-mono text-sm">{simulationResults.targetMetric.metricName}</span>
-                          </div>
-                        )}
-                      </div>
                       <div className="mt-4 text-sm text-muted-foreground">
                         <p>
                           {simulationResults.affectedNodes.length} module
                           {simulationResults.affectedNodes.length !== 1 ? "s" : ""} affected by this change
                         </p>
+                        <p className="mt-1">
+                          {impactChains.length} impact chain
+                          {impactChains.length !== 1 ? "s" : ""} identified
+                        </p>
                       </div>
+
+                      {onApplyChanges && (
+                        <div className="mt-4">
+                          <Button
+                            onClick={onApplyChanges}
+                            className="w-full flex items-center justify-center gap-2"
+                            variant="default"
+                          >
+                            <Save className="h-4 w-4" /> Apply Changes to Flowchart
+                          </Button>
+                          <p className="text-xs text-muted-foreground text-center mt-2">
+                            This will permanently update the input value and recalculate all affected modules
+                          </p>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              <TabsContent value="propagation" className="flex-1 overflow-hidden mt-4">
+                <ScrollArea className="h-[400px] pr-4">
+                  <div className="space-y-4">
+                    {impactChains.length > 0 ? (
+                      impactChains.map((chain, chainIndex) => (
+                        <Card key={chainIndex}>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-base flex items-center justify-between">
+                              <span>Impact Chain #{chainIndex + 1}</span>
+                              <Badge
+                                variant="outline"
+                                className={
+                                  Math.abs(chain.percentChanges[chain.percentChanges.length - 1]) > 5
+                                    ? "bg-red-50 text-red-700"
+                                    : "bg-amber-50 text-amber-700"
+                                }
+                              >
+                                {chain.percentChanges[chain.percentChanges.length - 1] > 0 ? "+" : ""}
+                                {chain.percentChanges[chain.percentChanges.length - 1].toFixed(2)}% Impact
+                              </Badge>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="flex flex-col items-center gap-2 py-2">
+                              {chain.path.map((nodeName, index) => (
+                                <div key={index} className="flex flex-col items-center">
+                                  {index > 0 && <ArrowDown className="h-5 w-5 text-muted-foreground my-1" />}
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline">{nodeName}</Badge>
+                                    {index < chain.metrics.length && (
+                                      <span className="font-mono text-sm">
+                                        {chain.metrics[index].split(".")[1]}
+                                        {index > 0 && chain.percentChanges[index] !== 0 && (
+                                          <Badge
+                                            variant="outline"
+                                            className={
+                                              chain.percentChanges[index] > 0
+                                                ? "bg-green-50 text-green-700 ml-1"
+                                                : "bg-red-50 text-red-700 ml-1"
+                                            }
+                                          >
+                                            {chain.percentChanges[index] > 0 ? "+" : ""}
+                                            {chain.percentChanges[index].toFixed(2)}%
+                                          </Badge>
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))
+                    ) : (
+                      <div className="flex items-center justify-center h-[200px] text-muted-foreground">
+                        No impact chains identified
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
               </TabsContent>
 
               <TabsContent value="details" className="flex-1 overflow-hidden mt-4">

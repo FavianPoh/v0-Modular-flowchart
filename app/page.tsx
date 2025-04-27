@@ -9,7 +9,7 @@ export default function Home() {
           Create, connect, and manipulate modules with mathematical and logical functions
         </p>
       </div>
-      <div className="flex-1">
+      <div className="flex-1 h-[calc(100vh-100px)]">
         <ModularFlowchart />
       </div>
     </main>

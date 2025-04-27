@@ -51,11 +51,34 @@ export function createNewModule(
   let moduleFunction
 
   try {
+    // Ensure the function code is properly formatted
+    if (!functionCode.trim().startsWith("return")) {
+      functionCode = `return ${functionCode};`
+    }
+
+    // Basic validation - check if the code has balanced braces
+    let braceCount = 0
+    for (let i = 0; i < functionCode.length; i++) {
+      if (functionCode[i] === "{") braceCount++
+      if (functionCode[i] === "}") braceCount--
+      if (braceCount < 0) throw new Error("Unbalanced braces")
+    }
+    if (braceCount !== 0) throw new Error("Unbalanced braces")
+
+    // Create the function safely
     moduleFunction = new Function("inputs", functionCode)
+
+    // Test the function with empty inputs to catch any immediate errors
+    try {
+      moduleFunction({})
+    } catch (testError) {
+      console.error("Error testing function:", testError)
+      throw new Error("Function execution failed")
+    }
   } catch (error) {
     console.error("Error creating function from code:", error)
-    functionCode = "return { error: 'Invalid function' };"
-    moduleFunction = (inputs: any) => ({ error: "Invalid function" })
+    functionCode = "return { result: 0 };"
+    moduleFunction = (inputs) => ({ result: 0 })
   }
 
   // Set default inputs, outputs, and function based on module type

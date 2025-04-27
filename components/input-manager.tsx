@@ -11,9 +11,11 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
 interface InputManagerProps {
   inputs: Record<string, any> // Changed from string[] to Record<string, any>
   onChange: (inputs: Record<string, any>) => void // Changed return type
+  defaultInputs?: Record<string, any>
+  showModifiedIndicator?: boolean
 }
 
-export function InputManager({ inputs, onChange }: InputManagerProps) {
+export function InputManager({ inputs, onChange, defaultInputs, showModifiedIndicator }: InputManagerProps) {
   const [newInputName, setNewInputName] = useState("")
   const [newInputValue, setNewInputValue] = useState("")
   const [error, setError] = useState("")
@@ -110,50 +112,60 @@ export function InputManager({ inputs, onChange }: InputManagerProps) {
           <Droppable droppableId="inputs">
             {(provided) => (
               <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-2">
-                {Object.entries(inputs).map(([name, value], index) => (
-                  <Draggable key={name} draggableId={name} index={index}>
-                    {(provided) => (
-                      <Card ref={provided.innerRef} {...provided.draggableProps} className="border border-gray-200">
-                        <CardContent className="p-2 flex items-center gap-2">
-                          <div {...provided.dragHandleProps} className="cursor-move">
-                            <MoveVertical className="h-4 w-4 text-gray-400" />
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 flex-1">
-                            <Input
-                              value={name}
-                              onChange={(e) => handleRenameInput(name, e.target.value)}
-                              placeholder="Name"
-                              className="text-sm"
-                              onBlur={(e) => {
-                                // If the input is invalid, revert to the original name
-                                if (
-                                  !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(e.target.value) ||
-                                  inputs[e.target.value] !== undefined
-                                ) {
-                                  e.target.value = name
-                                }
-                              }}
-                            />
-                            <Input
-                              value={value}
-                              onChange={(e) => handleInputChange(name, e.target.value)}
-                              placeholder="Value"
-                              className="text-sm"
-                            />
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-100"
-                            onClick={() => handleRemoveInput(name)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </CardContent>
-                      </Card>
-                    )}
-                  </Draggable>
-                ))}
+                {Object.entries(inputs).map(([name, value], index) => {
+                  // Check if this value is modified from default
+                  const isModified =
+                    showModifiedIndicator &&
+                    defaultInputs &&
+                    (typeof value === "number" && typeof defaultInputs[name] === "number"
+                      ? Math.abs(value - defaultInputs[name]) > 0.000001
+                      : JSON.stringify(value) !== JSON.stringify(defaultInputs[name]))
+
+                  return (
+                    <Draggable key={name} draggableId={name} index={index}>
+                      {(provided) => (
+                        <Card ref={provided.innerRef} {...provided.draggableProps} className="border border-gray-200">
+                          <CardContent className="p-2 flex items-center gap-2">
+                            <div {...provided.dragHandleProps} className="cursor-move">
+                              <MoveVertical className="h-4 w-4 text-gray-400" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 flex-1">
+                              <Input
+                                value={name}
+                                onChange={(e) => handleRenameInput(name, e.target.value)}
+                                placeholder="Name"
+                                className="text-sm"
+                                onBlur={(e) => {
+                                  // If the input is invalid, revert to the original name
+                                  if (
+                                    !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(e.target.value) ||
+                                    inputs[e.target.value] !== undefined
+                                  ) {
+                                    e.target.value = name
+                                  }
+                                }}
+                              />
+                              <Input
+                                value={value}
+                                onChange={(e) => handleInputChange(name, e.target.value)}
+                                placeholder="Value"
+                                className="text-sm"
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-100"
+                              onClick={() => handleRemoveInput(name)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      )}
+                    </Draggable>
+                  )
+                })}
                 {provided.placeholder}
               </div>
             )}

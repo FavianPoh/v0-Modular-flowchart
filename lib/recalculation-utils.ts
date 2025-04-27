@@ -6,7 +6,16 @@ function executeModule(moduleData: any) {
     if (typeof moduleData.function === "function") {
       // Create a clean copy of inputs to prevent reference issues
       const inputsCopy = JSON.parse(JSON.stringify(moduleData.inputs || {}))
-      return moduleData.function(inputsCopy)
+
+      // Debug log to verify inputs are being used
+      console.log(`Executing module ${moduleData.label || "unknown"} with inputs:`, inputsCopy)
+
+      const outputs = moduleData.function(inputsCopy)
+
+      // Debug log for outputs
+      console.log(`Module execution produced outputs:`, outputs)
+
+      return outputs
     }
 
     // If no function is defined, return the default outputs
@@ -20,10 +29,12 @@ function executeModule(moduleData: any) {
 // Build a dependency graph from nodes and edges
 export function buildDependencyGraph(nodes: Node[], edges: Edge[]) {
   const graph: Record<string, string[]> = {}
+  const reverseGraph: Record<string, string[]> = {}
 
   // Initialize graph with all nodes
   nodes.forEach((node) => {
     graph[node.id] = []
+    reverseGraph[node.id] = []
   })
 
   // Add dependencies based on edges
@@ -35,9 +46,14 @@ export function buildDependencyGraph(nodes: Node[], edges: Edge[]) {
     if (!graph[targetId].includes(sourceId)) {
       graph[targetId].push(sourceId)
     }
+
+    // Add targetId as a dependent of sourceId in reverse graph
+    if (!reverseGraph[sourceId].includes(targetId)) {
+      reverseGraph[sourceId].push(targetId)
+    }
   })
 
-  return graph
+  return { graph, reverseGraph }
 }
 
 // Perform topological sort to determine execution order
@@ -83,8 +99,10 @@ export function topologicalSort(graph: Record<string, string[]>) {
   return order
 }
 
-// Update node inputs based on connections
-export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
+// Enhanced version to ensure all dependencies are updated
+export function updateNodeInputs(nodes: Node[], edges: Edge[], changedNodeId?: string) {
+  console.log("Starting recalculation", changedNodeId ? `from changed node ${changedNodeId}` : "for all nodes")
+
   // Create a deep copy of nodes to avoid reference issues
   const nodesCopy = nodes.map((node) => ({
     ...node,
@@ -92,6 +110,8 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
       ...node.data,
       inputs: JSON.parse(JSON.stringify(node.data.inputs || {})),
       outputs: JSON.parse(JSON.stringify(node.data.outputs || {})),
+      // Preserve function
+      function: node.data.function,
     },
   }))
 
@@ -107,9 +127,40 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
     edgesByTarget[edge.target].push(edge)
   })
 
+  // Build dependency graph
+  const { graph, reverseGraph } = buildDependencyGraph(nodesCopy, edges)
+
   // Get execution order
-  const graph = buildDependencyGraph(nodesCopy, edges)
   const executionOrder = topologicalSort(graph)
+
+  // If we have a specific changed node, determine all affected downstream nodes
+  const nodesToUpdate = new Set<string>()
+
+  if (changedNodeId) {
+    // Add the changed node itself
+    nodesToUpdate.add(changedNodeId)
+
+    // Function to recursively add all downstream nodes
+    function addDownstreamNodes(nodeId: string) {
+      const dependents = reverseGraph[nodeId] || []
+
+      for (const depId of dependents) {
+        if (!nodesToUpdate.has(depId)) {
+          nodesToUpdate.add(depId)
+          // Recursively add this node's dependents
+          addDownstreamNodes(depId)
+        }
+      }
+    }
+
+    // Add all nodes affected by the change
+    addDownstreamNodes(changedNodeId)
+
+    console.log(`Found ${nodesToUpdate.size} nodes to update including node ${changedNodeId}`)
+  } else {
+    // Update all nodes if no specific changed node
+    executionOrder.forEach((nodeId) => nodesToUpdate.add(nodeId))
+  }
 
   // Track which nodes actually changed
   const updatedNodeIds = new Set<string>()
@@ -118,6 +169,11 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
   for (const nodeId of executionOrder) {
     const node = nodeMap.get(nodeId)
     if (!node) continue
+
+    // Skip nodes that don't need recalculation
+    if (changedNodeId && !nodesToUpdate.has(nodeId)) {
+      continue
+    }
 
     // Get edges targeting this node
     const targetingEdges = edgesByTarget[nodeId] || []
@@ -128,33 +184,65 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
       const sourceNode = nodeMap.get(edge.source)
       if (!sourceNode) return
 
-      // Calculate source node outputs
-      const sourceOutputs = executeModule(sourceNode.data)
+      // Get the most up-to-date source outputs
+      const sourceOutputs = sourceNode.data.outputs || {}
 
       // Extract input and output keys from handles
       const sourceOutputKey = edge.sourceHandle?.replace("output-", "")
       const targetInputKey = edge.targetHandle?.replace("input-", "")
 
       if (sourceOutputKey && targetInputKey && sourceOutputs[sourceOutputKey] !== undefined) {
-        // Check if the input value would actually change
-        if (JSON.stringify(node.data.inputs[targetInputKey]) !== JSON.stringify(sourceOutputs[sourceOutputKey])) {
+        // Always update the input to ensure the latest values are used
+        const oldValue = JSON.stringify(node.data.inputs[targetInputKey])
+        const newValue = JSON.stringify(sourceOutputs[sourceOutputKey])
+
+        if (oldValue !== newValue) {
           // Update the input
-          node.data.inputs[targetInputKey] = sourceOutputs[sourceOutputKey]
+          node.data.inputs[targetInputKey] = JSON.parse(newValue)
           inputsChanged = true
-          updatedNodeIds.add(nodeId)
+          console.log(`Updated input ${targetInputKey} of node ${nodeId} from ${oldValue} to ${newValue}`)
         }
       }
     })
 
-    // Only recalculate outputs if inputs changed
-    if (inputsChanged || updatedNodeIds.has(nodeId)) {
-      const outputs = executeModule(node.data)
-      if (JSON.stringify(outputs) !== JSON.stringify(node.data.outputs)) {
-        node.data.outputs = outputs
-        updatedNodeIds.add(nodeId)
+    // Always recalculate outputs if this node is in the update list
+    if (inputsChanged || nodesToUpdate.has(nodeId)) {
+      try {
+        // Execute the function to get new outputs
+        const outputs = executeModule(node.data)
+
+        // Check if outputs actually changed
+        const outputsChanged = !Object.keys(outputs).every(
+          (key) => JSON.stringify(outputs[key]) === JSON.stringify(node.data.outputs[key]),
+        )
+
+        if (outputsChanged) {
+          node.data.outputs = outputs
+          updatedNodeIds.add(nodeId)
+          console.log(`Module ${nodeId} (${node.data.label}) output updated`)
+        }
+      } catch (error) {
+        console.error(`Error executing module ${nodeId}:`, error)
       }
     }
   }
+
+  // Add a flag to show recalculation for visual feedback
+  nodesCopy.forEach((node) => {
+    if (updatedNodeIds.has(node.id)) {
+      node.data.wasRecalculated = true
+
+      // Clear the flag after a short delay for animation
+      setTimeout(() => {
+        const element = document.getElementById(`node-${node.id}`)
+        if (element) {
+          element.classList.remove("recalculated")
+        }
+      }, 1000)
+    }
+  })
+
+  console.log(`Recalculation complete, ${updatedNodeIds.size} nodes updated`)
 
   // Only create a new array if some nodes actually changed
   if (updatedNodeIds.size > 0) {
@@ -166,9 +254,9 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[]) {
 }
 
 // Recalculate all modules in the flowchart
-export function recalculateFlowchart(nodes: Node[], edges: Edge[]) {
+export function recalculateFlowchart(nodes: Node[], edges: Edge[], changedNodeId?: string) {
   try {
-    return updateNodeInputs(nodes, edges)
+    return updateNodeInputs(nodes, edges, changedNodeId)
   } catch (error) {
     console.error("Error in recalculateFlowchart:", error)
     return nodes // Return original nodes on error
@@ -189,7 +277,9 @@ export function findDependentNodes(nodeId: string, nodes: Node[], edges: Edge[])
 
     for (const edge of outgoingEdges) {
       const targetId = edge.target
-      dependents.push(targetId)
+      if (!dependents.includes(targetId)) {
+        dependents.push(targetId)
+      }
       traverse(targetId)
     }
   }
