@@ -897,7 +897,13 @@ function FlowChart() {
       </div>
 
       {selectedNode && (
-        <ModuleDetails nodeId={selectedNode} nodes={nodes} updateNodeData={updateNodeData} onClose={closeDetails} />
+        <ModuleDetails
+          nodeId={selectedNode}
+          nodes={nodes}
+          edges={edges}
+          updateNodeData={updateNodeData}
+          onClose={closeDetails}
+        />
       )}
 
       <ConnectionPanel
