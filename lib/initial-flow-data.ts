@@ -15,6 +15,7 @@ export const initialNodes: Node[] = [
       outputs: { revenue: 50000 },
       function: (inputs: any) => ({ revenue: Number(inputs.monthlyRevenue) }),
       functionCode: "return { revenue: Number(inputs.monthlyRevenue) };",
+      userAdded: false,
     },
   },
   {
@@ -30,6 +31,7 @@ export const initialNodes: Node[] = [
       outputs: { totalCosts: 35000 },
       function: (inputs: any) => ({ totalCosts: Number(inputs.fixedCosts) + Number(inputs.variableCosts) }),
       functionCode: "return { totalCosts: Number(inputs.fixedCosts) + Number(inputs.variableCosts) };",
+      userAdded: false,
     },
   },
   {
@@ -45,6 +47,7 @@ export const initialNodes: Node[] = [
       outputs: { profit: 15000 },
       function: (inputs: any) => ({ profit: Number(inputs.revenue) - Number(inputs.costs) }),
       functionCode: "return { profit: Number(inputs.revenue) - Number(inputs.costs) };",
+      userAdded: false,
     },
   },
   {
@@ -60,6 +63,7 @@ export const initialNodes: Node[] = [
       outputs: { taxRate: 0.21 },
       function: (inputs: any) => ({ taxRate: Number(inputs.taxPercentage) / 100 }),
       functionCode: "return { taxRate: Number(inputs.taxPercentage) / 100 };",
+      userAdded: false,
     },
   },
   {
@@ -75,6 +79,7 @@ export const initialNodes: Node[] = [
       outputs: { taxAmount: 3150 },
       function: (inputs: any) => ({ taxAmount: Number(inputs.profit) * Number(inputs.taxRate) }),
       functionCode: "return { taxAmount: Number(inputs.profit) * Number(inputs.taxRate) };",
+      userAdded: false,
     },
   },
   {
@@ -90,6 +95,7 @@ export const initialNodes: Node[] = [
       outputs: { netProfit: 11850 },
       function: (inputs: any) => ({ netProfit: Number(inputs.profit) - Number(inputs.taxAmount) }),
       functionCode: "return { netProfit: Number(inputs.profit) - Number(inputs.taxAmount) };",
+      userAdded: false,
     },
   },
   {
@@ -105,6 +111,7 @@ export const initialNodes: Node[] = [
       outputs: { investment: 100000 },
       function: (inputs: any) => ({ investment: Number(inputs.totalInvestment) }),
       functionCode: "return { investment: Number(inputs.totalInvestment) };",
+      userAdded: false,
     },
   },
   {
@@ -120,6 +127,7 @@ export const initialNodes: Node[] = [
       outputs: { roi: 11.85 },
       function: (inputs: any) => ({ roi: (Number(inputs.netProfit) / Number(inputs.investment)) * 100 }),
       functionCode: "return { roi: (Number(inputs.netProfit) / Number(inputs.investment)) * 100 };",
+      userAdded: false,
     },
   },
   {
@@ -147,6 +155,7 @@ return {
   meetsTarget: roi >= threshold,
   status: roi >= threshold ? "Target achieved" : "Below target",
 };`,
+      userAdded: false,
     },
   },
   {
@@ -220,6 +229,7 @@ return {
   netMargin: netMargin.toFixed(1),
   status
 };`,
+      userAdded: false,
     },
   },
 ]

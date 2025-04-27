@@ -9,8 +9,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
 
 interface InputManagerProps {
-  inputs: Record<string, any>
-  onChange: (inputs: Record<string, any>) => void
+  inputs: Record<string, any> // Changed from string[] to Record<string, any>
+  onChange: (inputs: Record<string, any>) => void // Changed return type
 }
 
 export function InputManager({ inputs, onChange }: InputManagerProps) {
@@ -59,27 +59,35 @@ export function InputManager({ inputs, onChange }: InputManagerProps) {
 
   const handleRenameInput = (oldName: string, newName: string) => {
     if (!newName.trim()) {
-      setError("Input name cannot be empty")
-      return
-    }
-
-    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(newName)) {
-      setError("Input name must start with a letter and contain only letters, numbers, and underscores")
-      return
+      return // Don't rename to empty string
     }
 
     if (oldName === newName) return
 
-    if (inputs[newName] !== undefined) {
-      setError("Input name already exists")
-      return
+    // Only validate if the name actually changed
+    if (oldName !== newName) {
+      if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(newName)) {
+        setError("Input name must start with a letter and contain only letters, numbers, and underscores")
+        return
+      }
+
+      if (inputs[newName] !== undefined) {
+        setError("Input name already exists")
+        return
+      }
     }
 
-    const { [oldName]: value, ...rest } = inputs
-    onChange({
-      ...rest,
-      [newName]: value,
+    // Create a new object with the renamed key
+    const newInputs: Record<string, any> = {}
+    Object.entries(inputs).forEach(([key, value]) => {
+      if (key === oldName) {
+        newInputs[newName] = value
+      } else {
+        newInputs[key] = value
+      }
     })
+
+    onChange(newInputs)
     setError("")
   }
 
@@ -116,6 +124,15 @@ export function InputManager({ inputs, onChange }: InputManagerProps) {
                               onChange={(e) => handleRenameInput(name, e.target.value)}
                               placeholder="Name"
                               className="text-sm"
+                              onBlur={(e) => {
+                                // If the input is invalid, revert to the original name
+                                if (
+                                  !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(e.target.value) ||
+                                  inputs[e.target.value] !== undefined
+                                ) {
+                                  e.target.value = name
+                                }
+                              }}
                             />
                             <Input
                               value={value}

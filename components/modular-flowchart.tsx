@@ -16,9 +16,10 @@ import ReactFlow, {
   type NodeTypes,
   Panel,
   MarkerType,
+  type Node,
 } from "reactflow"
 import "reactflow/dist/style.css"
-import { Plus, Save, RotateCcw, ZoomIn, Link, RefreshCw } from "lucide-react"
+import { Plus, Save, RotateCcw, ZoomIn, Link, RefreshCw, Code, Library } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -37,6 +38,8 @@ import { recalculateFlowchart } from "@/lib/recalculation-utils"
 import { InputManager } from "@/components/input-manager"
 import { FormulaBuilder } from "@/components/formula-builder"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { CodeExportDialog } from "@/components/code-export-dialog"
+import { ModuleLibrary, type ModuleLibraryItem } from "@/components/module-library"
 
 const nodeTypes: NodeTypes = {
   moduleNode: ModuleNode,
@@ -46,7 +49,7 @@ const STORAGE_KEY = "modular-flowchart-data"
 
 // This is the inner component that uses ReactFlow hooks
 function FlowChart() {
-  // Flag to disable auto-recalculation on initial load
+  // Refs to prevent update loops
   const initialLoadComplete = useRef(false)
   const isRecalculatingRef = useRef(false)
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
@@ -54,6 +57,11 @@ function FlowChart() {
   const edgesRef = useRef<any[]>([])
   const autoRecalculateRef = useRef(true)
   const pendingRecalculationRef = useRef(false)
+  const isInitialRenderRef = useRef(true)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isSavingRef = useRef(false)
+  const skipEffectsRef = useRef(true)
+  const updateNodeDataTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Add delete handler to initial nodes
   const initialNodesWithHandlers = initialNodes.map((node) => ({
@@ -61,6 +69,7 @@ function FlowChart() {
     data: {
       ...node.data,
       onDelete: (nodeId: string) => deleteNode(nodeId),
+      onCancel: (nodeId: string) => cancelModule(nodeId),
     },
   }))
 
@@ -69,6 +78,8 @@ function FlowChart() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [isAddingModule, setIsAddingModule] = useState(false)
   const [isManagingConnections, setIsManagingConnections] = useState(false)
+  const [isExportingCode, setIsExportingCode] = useState(false)
+  const [isModuleLibraryOpen, setIsModuleLibraryOpen] = useState(false)
   const [newModuleType, setNewModuleType] = useState("math")
   const [newModuleName, setNewModuleName] = useState("")
   const [newModuleDescription, setNewModuleDescription] = useState("")
@@ -83,21 +94,19 @@ function FlowChart() {
   const [isInitialized, setIsInitialized] = useState(false)
   const { toast } = useToast()
 
-  // Update refs when state changes
+  // Update refs when state changes - use a single effect to minimize renders
   useEffect(() => {
     nodesRef.current = nodes
-  }, [nodes])
-
-  useEffect(() => {
     edgesRef.current = edges
-  }, [edges])
-
-  useEffect(() => {
     autoRecalculateRef.current = autoRecalculate
-  }, [autoRecalculate])
+  }, [nodes, edges, autoRecalculate])
 
   // Load saved data from localStorage on initial render
   useEffect(() => {
+    // Skip if not initial render
+    if (!isInitialRenderRef.current) return
+    isInitialRenderRef.current = false
+
     const loadData = () => {
       try {
         const savedData = localStorage.getItem(STORAGE_KEY)
@@ -110,6 +119,7 @@ function FlowChart() {
             data: {
               ...node.data,
               onDelete: (nodeId: string) => deleteNode(nodeId),
+              onCancel: (nodeId: string) => cancelModule(nodeId), // Add cancel handler
               // Recreate function from functionCode
               function: node.data.functionCode ? new Function("inputs", node.data.functionCode) : undefined,
             },
@@ -129,7 +139,8 @@ function FlowChart() {
         // Set a timeout to enable auto-recalculation after initial render is complete
         setTimeout(() => {
           initialLoadComplete.current = true
-        }, 1000)
+          skipEffectsRef.current = false
+        }, 2000)
       } catch (error) {
         console.error("Error loading saved data:", error)
         // Fallback to initial data
@@ -139,34 +150,64 @@ function FlowChart() {
 
         setTimeout(() => {
           initialLoadComplete.current = true
-        }, 1000)
+          skipEffectsRef.current = false
+        }, 2000)
       }
     }
 
     // Delay loading to ensure component is fully mounted
-    setTimeout(loadData, 100)
+    setTimeout(loadData, 500)
   }, [])
 
-  // Save data to localStorage when nodes or edges change
-  useEffect(() => {
-    if (isInitialized && initialLoadComplete.current) {
-      try {
-        // Create a clean version of nodes without circular references
-        const nodesToSave = nodes.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            // Don't save the function itself, just the code
-            function: undefined,
-          },
-        }))
+  // Save data to localStorage - completely separated from render cycle
+  const saveFlowchartData = useCallback(() => {
+    if (!isInitialized || !initialLoadComplete.current || isSavingRef.current) return
 
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: nodesToSave, edges }))
-      } catch (error) {
-        console.error("Error saving data:", error)
+    try {
+      isSavingRef.current = true
+      // Create a clean version of nodes without circular references
+      const nodesToSave = nodesRef.current.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          // Don't save the function itself, just the code
+          function: undefined,
+        },
+      }))
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: nodesToSave, edges: edgesRef.current }))
+      isSavingRef.current = false
+    } catch (error) {
+      console.error("Error saving data:", error)
+      isSavingRef.current = false
+    }
+  }, [isInitialized])
+
+  // Debounced save function
+  const debouncedSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+    saveTimeoutRef.current = setTimeout(saveFlowchartData, 1000)
+  }, [saveFlowchartData])
+
+  // Trigger save when nodes or edges change - with safeguards
+  useEffect(() => {
+    if (skipEffectsRef.current || !isInitialized || !initialLoadComplete.current) return
+    debouncedSave()
+  }, [nodes, edges, debouncedSave, isInitialized])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+      if (updateNodeDataTimeoutRef.current) {
+        clearTimeout(updateNodeDataTimeoutRef.current)
       }
     }
-  }, [nodes, edges, isInitialized])
+  }, [])
 
   // Recalculate the flowchart when needed - completely separated from render cycle
   const recalculate = useCallback(() => {
@@ -211,37 +252,22 @@ function FlowChart() {
     }, 0)
   }, [setNodes, toast])
 
-  // Completely separate auto-recalculation from the render cycle
+  // Trigger recalculation when needed - with safeguards
   useEffect(() => {
-    // Set up a separate interval for auto-recalculation
-    let recalculationInterval: NodeJS.Timeout | null = null
+    if (
+      skipEffectsRef.current ||
+      !initialLoadComplete.current ||
+      isRecalculatingRef.current ||
+      !needsRecalculation ||
+      !autoRecalculateRef.current
+    )
+      return
 
-    const setupAutoRecalculation = () => {
-      if (!initialLoadComplete.current) return
+    const timer = setTimeout(() => {
+      recalculate()
+    }, 500)
 
-      if (autoRecalculateRef.current) {
-        // Check for recalculation every second
-        recalculationInterval = setInterval(() => {
-          if (needsRecalculation && !isRecalculatingRef.current) {
-            recalculate()
-          }
-        }, 1000)
-      } else if (recalculationInterval) {
-        clearInterval(recalculationInterval)
-      }
-    }
-
-    // Set up auto-recalculation after a delay
-    const initTimer = setTimeout(() => {
-      setupAutoRecalculation()
-    }, 2000)
-
-    return () => {
-      clearTimeout(initTimer)
-      if (recalculationInterval) {
-        clearInterval(recalculationInterval)
-      }
-    }
+    return () => clearTimeout(timer)
   }, [needsRecalculation, recalculate])
 
   const onConnect = useCallback(
@@ -255,7 +281,11 @@ function FlowChart() {
       }
 
       setEdges((eds) => addEdge(newEdge, eds))
-      setNeedsRecalculation(true)
+
+      // Delay setting needsRecalculation to prevent immediate recalculation
+      setTimeout(() => {
+        setNeedsRecalculation(true)
+      }, 0)
 
       if (!autoRecalculate) {
         toast({
@@ -285,7 +315,10 @@ function FlowChart() {
         setSelectedNode(null)
       }
 
-      setNeedsRecalculation(true)
+      // Delay setting needsRecalculation to prevent immediate recalculation
+      setTimeout(() => {
+        setNeedsRecalculation(true)
+      }, 0)
 
       toast({
         title: "Module deleted",
@@ -295,9 +328,49 @@ function FlowChart() {
     [setEdges, setNodes, selectedNode, toast],
   )
 
+  // Cancel a module (for user-added modules)
+  const cancelModule = useCallback(
+    (nodeId: string) => {
+      // Find the node
+      const node = nodes.find((n) => n.id === nodeId)
+      if (!node || !node.data.isUserAdded) return
+
+      // Reset the node to its default state
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id === nodeId) {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                inputs: { ...n.data.defaultInputs },
+                needsRecalculation: true,
+              },
+            }
+          }
+          return n
+        }),
+      )
+
+      // Delay setting needsRecalculation to prevent immediate recalculation
+      setTimeout(() => {
+        setNeedsRecalculation(true)
+      }, 0)
+
+      toast({
+        title: "Module reset",
+        description: "Module has been reset to its default state",
+      })
+    },
+    [nodes, setNodes, toast],
+  )
+
   const handleFormulaChange = (formula: string, functionCode: string) => {
-    setNewModuleFormula(formula)
-    setNewModuleFunctionCode(functionCode)
+    // Only update if the values have actually changed
+    if (newModuleFormula !== formula || newModuleFunctionCode !== functionCode) {
+      setNewModuleFormula(formula)
+      setNewModuleFunctionCode(functionCode)
+    }
   }
 
   const handleAddModule = () => {
@@ -323,6 +396,7 @@ function FlowChart() {
     // Mark as user-added and add delete handler
     newNode.data.isUserAdded = true
     newNode.data.onDelete = deleteNode
+    newNode.data.onCancel = cancelModule
 
     setNodes((nds) => [...nds, newNode])
     setIsAddingModule(false)
@@ -339,20 +413,37 @@ function FlowChart() {
     })
   }
 
+  // Add a module from the library
+  const handleAddFromLibrary = (moduleItem: ModuleLibraryItem) => {
+    // Create inputs object from the library item
+    const inputs = { ...moduleItem.inputs }
+
+    // Create a new module
+    const newNode = createNewModule(
+      moduleItem.type,
+      moduleItem.name,
+      nodes,
+      moduleItem.description,
+      inputs,
+      moduleItem.functionCode,
+    )
+
+    // Mark as from library and add handlers
+    newNode.data.isFromLibrary = true
+    newNode.data.onDelete = deleteNode
+    newNode.data.onCancel = cancelModule
+
+    setNodes((nds) => [...nds, newNode])
+
+    toast({
+      title: "Module added from library",
+      description: `${moduleItem.name} has been added to the flowchart`,
+    })
+  }
+
   const handleSaveFlowchart = () => {
     try {
-      // Create a clean version of nodes without circular references
-      const nodesToSave = nodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          // Don't save the function itself, just the code
-          function: undefined,
-        },
-      }))
-
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: nodesToSave, edges }))
-
+      saveFlowchartData()
       toast({
         title: "Flowchart saved",
         description: "Your flowchart has been saved successfully",
@@ -375,6 +466,7 @@ function FlowChart() {
         data: {
           ...node.data,
           onDelete: deleteNode,
+          onCancel: cancelModule,
         },
       })),
     )
@@ -390,32 +482,44 @@ function FlowChart() {
 
   const updateNodeData = useCallback(
     (nodeId: string, newData: any) => {
-      setNodes((nds) =>
-        nds.map((node) => {
-          if (node.id === nodeId) {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                ...newData,
-                onDelete: deleteNode, // Ensure delete handler is preserved
-              },
-            }
-          }
-          return node
-        }),
-      )
-
-      setNeedsRecalculation(true)
-
-      if (!autoRecalculate) {
-        toast({
-          title: "Module updated",
-          description: "Click 'Recalculate' to update dependent modules",
-        })
+      // Clear any existing timeout
+      if (updateNodeDataTimeoutRef.current) {
+        clearTimeout(updateNodeDataTimeoutRef.current)
       }
+
+      // Use timeout to batch updates and prevent cascading renders
+      updateNodeDataTimeoutRef.current = setTimeout(() => {
+        setNodes((nds) =>
+          nds.map((node) => {
+            if (node.id === nodeId) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  ...newData,
+                  onDelete: deleteNode, // Ensure delete handler is preserved
+                  onCancel: cancelModule, // Ensure cancel handler is preserved
+                },
+              }
+            }
+            return node
+          }),
+        )
+
+        // Delay setting needsRecalculation to prevent immediate recalculation
+        setTimeout(() => {
+          setNeedsRecalculation(true)
+        }, 0)
+
+        if (!autoRecalculate) {
+          toast({
+            title: "Module updated",
+            description: "Click 'Recalculate' to update dependent modules",
+          })
+        }
+      }, 0)
     },
-    [setNodes, deleteNode, autoRecalculate, toast],
+    [setNodes, deleteNode, cancelModule, autoRecalculate, toast],
   )
 
   const closeDetails = () => {
@@ -430,48 +534,109 @@ function FlowChart() {
   }
 
   // Add a custom connection between modules
-  const handleAddConnection = (sourceId: string, sourceHandle: string, targetId: string, targetHandle: string) => {
-    const newEdge = {
-      id: `e${sourceId}-${targetId}-${Date.now()}`,
-      source: sourceId,
-      sourceHandle: sourceHandle,
-      target: targetId,
-      targetHandle: targetHandle,
-      animated: true,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-      },
-    }
+  const handleAddConnection = useCallback(
+    (sourceId: string, sourceHandle: string, targetId: string, targetHandle: string) => {
+      const newEdge = {
+        id: `e${sourceId}-${targetId}-${Date.now()}`,
+        source: sourceId,
+        sourceHandle: sourceHandle,
+        target: targetId,
+        targetHandle: targetHandle,
+        animated: true,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+        },
+      }
 
-    setEdges((eds) => [...eds, newEdge])
-    setNeedsRecalculation(true)
+      setEdges((eds) => [...eds, newEdge])
 
-    toast({
-      title: "Connection added",
-      description: autoRecalculate
-        ? "Modules will be updated automatically"
-        : "Click 'Recalculate' to update module values",
-    })
-  }
+      // Delay setting needsRecalculation to prevent immediate recalculation
+      setTimeout(() => {
+        setNeedsRecalculation(true)
+      }, 0)
+
+      toast({
+        title: "Connection added",
+        description: autoRecalculate
+          ? "Modules will be updated automatically"
+          : "Click 'Recalculate' to update module values",
+      })
+    },
+    [setEdges, autoRecalculate, toast],
+  )
 
   // Delete a connection
-  const handleDeleteConnection = (edgeId: string) => {
-    setEdges((eds) => eds.filter((e) => e.id !== edgeId))
-    setNeedsRecalculation(true)
+  const handleDeleteConnection = useCallback(
+    (edgeId: string) => {
+      setEdges((eds) => eds.filter((e) => e.id !== edgeId))
 
-    toast({
-      title: "Connection removed",
-      description: autoRecalculate
-        ? "Modules will be updated automatically"
-        : "Click 'Recalculate' to update module values",
-    })
-  }
+      // Delay setting needsRecalculation to prevent immediate recalculation
+      setTimeout(() => {
+        setNeedsRecalculation(true)
+      }, 0)
+
+      toast({
+        title: "Connection removed",
+        description: autoRecalculate
+          ? "Modules will be updated automatically"
+          : "Click 'Recalculate' to update module values",
+      })
+    },
+    [setEdges, autoRecalculate, toast],
+  )
 
   // Handle auto-recalculate toggle without triggering immediate recalculation
   const handleAutoRecalculateChange = (checked: boolean) => {
     setAutoRecalculate(checked)
     // Don't trigger recalculation immediately
   }
+
+  // Handle import flowchart from code
+  const handleImportFlowchart = (importedNodes: Node[], importedEdges: Edge[]) => {
+    // Add delete and cancel handlers to imported nodes
+    const nodesWithHandlers = importedNodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        onDelete: (nodeId: string) => deleteNode(nodeId),
+        onCancel: (nodeId: string) => cancelModule(nodeId),
+      },
+    }))
+
+    setNodes(nodesWithHandlers)
+    setEdges(importedEdges)
+
+    // Delay setting needsRecalculation to prevent immediate recalculation
+    setTimeout(() => {
+      setNeedsRecalculation(true)
+    }, 0)
+  }
+
+  // Update the onAddNode function in modular-flowchart.tsx to mark user-added modules
+
+  const onAddNode = useCallback(
+    (moduleTemplate: any) => {
+      const newNode: any = {
+        id: `module_${Date.now()}`,
+        type: "moduleNode",
+        position: { x: 100, y: 100 },
+        data: {
+          ...moduleTemplate,
+          label: moduleTemplate.label || "New Module",
+          isUserAdded: true, // Mark this module as user-added
+          inputs: [],
+          formula: "",
+          value: null,
+          onDelete: deleteNode,
+          onCancel: cancelModule,
+        },
+      }
+
+      setNodes((nds) => nds.concat(newNode))
+      setSelectedNode(newNode.id)
+    },
+    [setNodes, setSelectedNode, deleteNode, cancelModule],
+  )
 
   return (
     <>
@@ -511,7 +676,7 @@ function FlowChart() {
               }
             }}
             nodeColor={(n) => {
-              if (n.data.isUserAdded) {
+              if (n.data.isUserAdded || n.data.isFromLibrary) {
                 return "#f0f9ff" // Light blue background for user-added modules
               }
 
@@ -662,7 +827,12 @@ function FlowChart() {
                   </TabsContent>
 
                   <TabsContent value="formula" className="space-y-4 mt-4">
-                    <FormulaBuilder inputs={newModuleInputs} onChange={handleFormulaChange} />
+                    <FormulaBuilder
+                      inputs={newModuleInputs}
+                      initialFormula={newModuleFormula}
+                      functionCode={newModuleFunctionCode}
+                      onChange={handleFormulaChange}
+                    />
                   </TabsContent>
                 </Tabs>
 
@@ -699,8 +869,16 @@ function FlowChart() {
               </DialogContent>
             </Dialog>
 
+            <Button variant="outline" className="gap-2" onClick={() => setIsModuleLibraryOpen(true)}>
+              <Library className="h-4 w-4" /> Module Library
+            </Button>
+
             <Button variant="outline" className="gap-2" onClick={() => setIsManagingConnections(true)}>
               <Link className="h-4 w-4" /> Connections
+            </Button>
+
+            <Button variant="outline" className="gap-2" onClick={() => setIsExportingCode(true)}>
+              <Code className="h-4 w-4" /> Export Code
             </Button>
 
             <Button variant="outline" className="gap-2" onClick={handleSaveFlowchart}>
@@ -729,6 +907,20 @@ function FlowChart() {
         edges={edges}
         onAddConnection={handleAddConnection}
         onDeleteConnection={handleDeleteConnection}
+      />
+
+      <CodeExportDialog
+        isOpen={isExportingCode}
+        onClose={() => setIsExportingCode(false)}
+        nodes={nodes}
+        edges={edges}
+      />
+
+      <ModuleLibrary
+        isOpen={isModuleLibraryOpen}
+        onClose={() => setIsModuleLibraryOpen(false)}
+        onAddModule={handleAddFromLibrary}
+        currentNodes={nodes}
       />
     </>
   )
