@@ -10,17 +10,21 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { executeModule } from "@/lib/module-utils"
-import { RotateCcw, Code, Settings, Activity, Info, ArrowRight, RefreshCw, FileText, BarChart2 } from "lucide-react"
+import { RotateCcw, Code, Settings, Activity, Info, ArrowRight, RefreshCw, FileText, Sliders } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { InputManager } from "@/components/input-manager"
 import { FormulaBuilder } from "@/components/formula-builder"
 import { MetricDrilldown } from "@/components/metric-drilldown"
+import { Slider } from "@/components/ui/slider"
+import { SensitivityDashboard, type SimulationResult } from "@/components/sensitivity-dashboard"
+import type { Edge } from "reactflow"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface ModuleDetailsProps {
   nodeId: string
   nodes: any[]
   edges: any[]
-  updateNodeData: (nodeId: string, newData: any) => void
+  updateNodeData: (nodeId: string, any) => void
   onClose: () => void
 }
 
@@ -34,13 +38,26 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
   const [initialFormula, setInitialFormula] = useState<string>("")
   const [isMetricDrilldownOpen, setIsMetricDrilldownOpen] = useState(false)
   const [selectedMetric, setSelectedMetric] = useState<string>("")
+  const [selectedInputForAnalysis, setSelectedInputForAnalysis] = useState<string>("")
+  const [sensitivityPercentage, setSensitivityPercentage] = useState(10)
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [simulationResults, setSimulationResults] = useState<SimulationResult | null>(null)
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false)
 
   // Refs to prevent update loops
   const isUpdatingRef = useRef(false)
   const initializedRef = useRef(false)
-  const nodeIdRef = useRef<string | null>(null)
+  const nodeIdRef = useRef<string | null>(nodeId)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastFunctionCodeRef = useRef<string>("")
+
+  // Create refs outside the conditional block
+  const debouncedUpdateNodeDataRef = useRef<(data: any) => void>(() => {})
+  const handleInputChangeRef = useRef<(newInputs: Record<string, any>) => void>(() => {})
+  const handleFunctionCodeChangeRef = useRef<(formula: string, code: string) => void>(() => {})
+  const handleCodeChangeRef = useRef<(e: React.ChangeEvent<HTMLTextAreaElement>) => void>(() => {})
+  const resetInputsRef = useRef<() => void>(() => {})
+  const runSensitivityAnalysisRef = useRef<() => void>(() => {})
 
   // Find connected nodes (both incoming and outgoing)
   const connectedNodes = nodes.filter((n) => {
@@ -124,8 +141,10 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
   }, [node])
 
   // Debounced function to update node data
-  const debouncedUpdateNodeData = useCallback(
-    (data: any) => {
+  const _debouncedUpdateNodeData = useRef<(data: any) => void>(() => {})
+
+  useEffect(() => {
+    _debouncedUpdateNodeData.current = (data: any) => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
       }
@@ -146,12 +165,17 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
           }
         }
       }, 300)
-    },
-    [nodeId, updateNodeData],
-  )
+    }
+  }, [nodeId, updateNodeData])
 
-  const handleInputChange = useCallback(
-    (newInputs: Record<string, any>) => {
+  const debouncedUpdateNodeData = useCallback((data: any) => {
+    _debouncedUpdateNodeData.current?.(data)
+  }, [])
+
+  const _handleInputChange = useRef<(newInputs: Record<string, any>) => void>(() => {})
+
+  useEffect(() => {
+    _handleInputChange.current = (newInputs: Record<string, any>) => {
       if (isUpdatingRef.current) return
 
       // Update local state immediately
@@ -169,12 +193,17 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
         const updatedNode = { ...node, data: { ...node.data, inputs: newInputs } }
         setOutputs(executeModule(updatedNode.data))
       }
-    },
-    [node, debouncedUpdateNodeData],
-  )
+    }
+  }, [node, debouncedUpdateNodeData])
 
-  const handleFunctionCodeChange = useCallback(
-    (formula: string, code: string) => {
+  const handleInputChange = useCallback((newInputs: Record<string, any>) => {
+    _handleInputChange.current?.(newInputs)
+  }, [])
+
+  const _handleFunctionCodeChange = useRef<(formula: string, code: string) => void>(() => {})
+
+  useEffect(() => {
+    _handleFunctionCodeChange.current = (formula: string, code: string) => {
       if (isUpdatingRef.current) return
 
       // Only update if the code has actually changed
@@ -210,12 +239,17 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       } catch (error) {
         console.error("Error creating function:", error)
       }
-    },
-    [node, debouncedUpdateNodeData],
-  )
+    }
+  }, [node, debouncedUpdateNodeData])
 
-  const handleCodeChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleFunctionCodeChange = useCallback((formula: string, code: string) => {
+    _handleFunctionCodeChange.current?.(formula, code)
+  }, [])
+
+  const _handleCodeChange = useRef<(e: React.ChangeEvent<HTMLTextAreaElement>) => void>(() => {})
+
+  useEffect(() => {
+    _handleCodeChange.current = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       if (isUpdatingRef.current) return
 
       const code = e.target.value
@@ -253,32 +287,43 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
       } catch (error) {
         console.error("Error creating function:", error)
       }
-    },
-    [node, debouncedUpdateNodeData],
-  )
+    }
+  }, [node, debouncedUpdateNodeData])
+
+  const handleCodeChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    _handleCodeChange.current?.(e)
+  }, [])
+
+  const _resetInputs = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    _resetInputs.current = () => {
+      if (!node || !node.data.defaultInputs || isUpdatingRef.current) return
+
+      // Update local state
+      setInputs({ ...node.data.defaultInputs })
+
+      // Debounce the node data update
+      debouncedUpdateNodeData({
+        inputs: { ...node.data.defaultInputs },
+        needsRecalculation: true,
+      })
+
+      // Recalculate outputs
+      const updatedNode = {
+        ...node,
+        data: {
+          ...node.data,
+          inputs: { ...node.data.defaultInputs },
+        },
+      }
+      setOutputs(executeModule(updatedNode.data))
+    }
+  }, [node, debouncedUpdateNodeData])
 
   const resetInputs = useCallback(() => {
-    if (!node || !node.data.defaultInputs || isUpdatingRef.current) return
-
-    // Update local state
-    setInputs({ ...node.data.defaultInputs })
-
-    // Debounce the node data update
-    debouncedUpdateNodeData({
-      inputs: { ...node.data.defaultInputs },
-      needsRecalculation: true,
-    })
-
-    // Recalculate outputs
-    const updatedNode = {
-      ...node,
-      data: {
-        ...node.data,
-        inputs: { ...node.data.defaultInputs },
-      },
-    }
-    setOutputs(executeModule(updatedNode.data))
-  }, [node, debouncedUpdateNodeData])
+    _resetInputs.current?.()
+  }, [])
 
   // Generate a plain English explanation of what the code does
   const generateExplanation = (code: string) => {
@@ -353,6 +398,222 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
 
   // Determine if this is a user-added module
   const isUserAdded = node.data.isUserAdded === true
+
+  const _runSensitivityAnalysis = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    _runSensitivityAnalysis.current = () => {
+      if (!node || !selectedInputForAnalysis) return
+
+      setIsSimulating(true)
+      setSimulationResults(null)
+
+      // Use setTimeout to avoid blocking the UI
+      setTimeout(() => {
+        try {
+          // Deep clone nodes to avoid modifying the original
+          const clonedNodes = nodes.map((node) => ({
+            ...node,
+            data: {
+              ...node.data,
+              inputs: { ...node.data.inputs },
+              outputs: { ...node.data.outputs },
+              // Recreate function from functionCode
+              function: node.data.functionCode ? new Function("inputs", node.data.functionCode) : undefined,
+            },
+          }))
+
+          // Create a map for quick node lookup
+          const nodeMap = new Map(clonedNodes.map((node) => [node.id, node]))
+
+          // Find the node to modify
+          const targetNodeId = nodeId
+          const targetNode = nodeMap.get(targetNodeId)
+          if (!targetNode) {
+            setIsSimulating(false)
+            return
+          }
+
+          // Get original input value
+          const inputName = selectedInputForAnalysis
+          const originalValue = targetNode.data.inputs[inputName]
+
+          // Calculate new value based on percentage change
+          const newValue =
+            typeof originalValue === "number" ? originalValue * (1 + sensitivityPercentage / 100) : originalValue
+
+          // Update the input of the target node
+          targetNode.data.inputs[inputName] = newValue
+
+          // If this is an input node, also update the output with the same name if it exists
+          if (targetNode.data.type === "input" && targetNode.data.outputs[inputName] !== undefined) {
+            targetNode.data.outputs[inputName] = newValue
+          }
+
+          // Build dependency graph for proper recalculation order
+          const graph: Record<string, string[]> = {}
+
+          // Initialize graph with all nodes
+          clonedNodes.forEach((node) => {
+            graph[node.id] = []
+          })
+
+          // Add dependencies based on edges
+          edges.forEach((edge) => {
+            const sourceId = edge.source
+            const targetId = edge.target
+
+            // Add sourceId as a dependency for targetId
+            if (!graph[targetId].includes(sourceId)) {
+              graph[targetId].push(sourceId)
+            }
+          })
+
+          // Perform topological sort to determine execution order
+          const visited = new Set<string>()
+          const temp = new Set<string>()
+          const executionOrder: string[] = []
+
+          function visit(nodeId: string) {
+            // If node is in temp, we have a cycle
+            if (temp.has(nodeId)) return
+
+            // If we've already processed this node, skip
+            if (visited.has(nodeId)) return
+
+            // Mark node as being processed
+            temp.add(nodeId)
+
+            // Visit all dependencies
+            const dependencies = graph[nodeId] || []
+            for (const depId of dependencies) {
+              visit(depId)
+            }
+
+            // Mark as fully processed
+            temp.delete(nodeId)
+            visited.add(nodeId)
+
+            // Add to result
+            executionOrder.push(nodeId)
+          }
+
+          // Visit all nodes
+          for (const nodeId in graph) {
+            if (!visited.has(nodeId)) {
+              visit(nodeId)
+            }
+          }
+
+          // Store original outputs for all nodes
+          const originalOutputs = new Map<string, Record<string, any>>()
+          clonedNodes.forEach((node) => {
+            originalOutputs.set(node.id, { ...node.data.outputs })
+          })
+
+          // Group edges by target node for efficient lookup
+          const edgesByTarget: Record<string, Edge[]> = {}
+          edges.forEach((edge) => {
+            if (!edgesByTarget[edge.target]) {
+              edgesByTarget[edge.target] = []
+            }
+            edgesByTarget[edge.target].push(edge)
+          })
+
+          // Track affected nodes
+          const affectedNodes: {
+            nodeId: string
+            nodeName: string
+            nodeType: string
+            originalOutputs: Record<string, any>
+            newOutputs: Record<string, any>
+            isTarget?: boolean
+          }[] = []
+
+          // Execute nodes in order
+          for (const nodeId of executionOrder) {
+            const node = nodeMap.get(nodeId)
+            if (!node || !node.data.function) continue
+
+            // Skip nodes that don't need recalculation
+            if (
+              nodeId !== targetNodeId &&
+              !graph[nodeId].some((depId) => affectedNodes.some((n) => n.nodeId === depId))
+            ) {
+              continue
+            }
+
+            // Get edges targeting this node
+            const targetingEdges = edgesByTarget[nodeId] || []
+
+            // Update inputs based on source node outputs
+            targetingEdges.forEach((edge) => {
+              const sourceNode = nodeMap.get(edge.source)
+              if (!sourceNode) return
+
+              // Extract input and output keys from handles
+              const sourceOutputKey = edge.sourceHandle?.replace("output-", "")
+              const targetInputKey = edge.targetHandle?.replace("input-", "")
+
+              if (sourceOutputKey && targetInputKey && sourceNode.data.outputs[sourceOutputKey] !== undefined) {
+                // Update the input
+                node.data.inputs[targetInputKey] = sourceNode.data.outputs[sourceOutputKey]
+              }
+            })
+
+            // Store original outputs
+            const originalNodeOutputs = originalOutputs.get(nodeId) || {}
+
+            // Recalculate outputs
+            try {
+              node.data.outputs = node.data.function(node.data.inputs)
+            } catch (simError) {
+              console.error("Error in sensitivity simulation:", simError)
+            }
+
+            // Check if outputs changed
+            const outputsChanged = Object.keys(node.data.outputs).some(
+              (key) => node.data.outputs[key] !== originalNodeOutputs[key],
+            )
+
+            if (outputsChanged) {
+              affectedNodes.push({
+                nodeId: node.id,
+                nodeName: node.data.label,
+                nodeType: node.data.type,
+                originalOutputs: originalNodeOutputs,
+                newOutputs: { ...node.data.outputs },
+                isTarget: false,
+              })
+            }
+          }
+
+          // Create simulation results
+          const results: SimulationResult = {
+            changedInput: {
+              nodeId: targetNodeId,
+              nodeName: targetNode.data.label,
+              inputName: selectedInputForAnalysis,
+              originalValue,
+              newValue,
+            },
+            affectedNodes,
+          }
+
+          setSimulationResults(results)
+          setIsDashboardOpen(true)
+        } catch (error) {
+          console.error("Error in sensitivity analysis:", error)
+        } finally {
+          setIsSimulating(false)
+        }
+      }, 100)
+    }
+  }, [nodeId, nodes, edges, selectedInputForAnalysis, sensitivityPercentage])
+
+  const runSensitivityAnalysis = useCallback(() => {
+    _runSensitivityAnalysis.current?.()
+  }, [])
 
   return (
     <>
@@ -481,6 +742,76 @@ export function ModuleDetails({ nodeId, nodes, edges, updateNodeData, onClose }:
               </div>
 
               <InputManager inputs={inputs} onChange={handleInputChange} />
+
+              <div className="border-t pt-4 mt-4">
+                <h3 className="text-sm font-medium mb-3">Sensitivity Analysis</h3>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Select Input to Analyze:</Label>
+                    <Select value={selectedInputForAnalysis} onValueChange={setSelectedInputForAnalysis}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an input" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.keys(inputs).map((inputName) => (
+                          <SelectItem key={inputName} value={inputName}>
+                            {inputName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {selectedInputForAnalysis && (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label>Input Change Percentage: {sensitivityPercentage}%</Label>
+                          <span className="text-sm text-muted-foreground">How much to adjust the input value</span>
+                        </div>
+                        <Slider
+                          value={[sensitivityPercentage]}
+                          onValueChange={(values) => setSensitivityPercentage(values[0])}
+                          min={-50}
+                          max={50}
+                          step={1}
+                          className="w-full"
+                        />
+                      </div>
+
+                      <div className="bg-slate-100 p-3 rounded-md">
+                        <div className="text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Current Value:</span>
+                            <span className="font-mono">
+                              {typeof inputs[selectedInputForAnalysis] === "number"
+                                ? inputs[selectedInputForAnalysis].toFixed(2)
+                                : String(inputs[selectedInputForAnalysis])}
+                            </span>
+                          </div>
+                          <div className="flex justify-between mt-1">
+                            <span className="text-muted-foreground">New Value (estimated):</span>
+                            <span className="font-mono">
+                              {typeof inputs[selectedInputForAnalysis] === "number"
+                                ? (inputs[selectedInputForAnalysis] * (1 + sensitivityPercentage / 100)).toFixed(2)
+                                : String(inputs[selectedInputForAnalysis])}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button onClick={runSensitivityAnalysis} disabled={isSimulating} className="w-full">
+                        {isSimulating ? "Analyzing..." : "Run Impact Analysis"}
+                        {isSimulating ? (
+                          <RefreshCw className="ml-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Sliders className="ml-2 h-4 w-4" />
+                        )}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
             </TabsContent>
 
             <TabsContent value="formula" className="space-y-4 mt-4">
@@ -535,24 +866,14 @@ return {
             <TabsContent value="outputs" className="space-y-4 mt-4">
               <div className="flex justify-between mb-4">
                 <h3 className="text-sm font-medium">Module Outputs</h3>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setOutputs(executeModule(node.data))}
-                    className="flex items-center gap-2"
-                  >
-                    <RefreshCw className="h-3 w-3" /> Recalculate
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsMetricDrilldownOpen(true)}
-                    className="flex items-center gap-2"
-                  >
-                    <BarChart2 className="h-3 w-3" /> Metric Analysis
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setOutputs(executeModule(node.data))}
+                  className="flex items-center gap-2"
+                >
+                  <RefreshCw className="h-3 w-3" /> Recalculate
+                </Button>
               </div>
 
               {Object.entries(outputs).length === 0 ? (
@@ -634,6 +955,35 @@ return {
         edges={edges}
         selectedNodeId={nodeId}
         selectedMetric={selectedMetric}
+        onJumpToNode={(nodeId) => {
+          onClose()
+          setTimeout(() => {
+            // We need to use setTimeout to ensure the current dialog is closed before opening a new one
+            updateNodeData(nodeId, {}) // This is just to trigger a re-render
+            // Now we need to tell the parent component to select this node
+            const event = new CustomEvent("selectNode", { detail: { nodeId } })
+            document.dispatchEvent(event)
+          }, 100)
+        }}
+      />
+
+      <SensitivityDashboard
+        isOpen={isDashboardOpen}
+        onClose={() => setIsDashboardOpen(false)}
+        nodes={nodes}
+        edges={edges}
+        simulationResults={simulationResults}
+        isSimulating={isSimulating}
+        onJumpToNode={(nodeId) => {
+          onClose()
+          setTimeout(() => {
+            // We need to use setTimeout to ensure the current dialog is closed before opening a new one
+            updateNodeData(nodeId, {}) // This is just to trigger a re-render
+            // Now we need to tell the parent component to select this node
+            const event = new CustomEvent("selectNode", { detail: { nodeId } })
+            document.dispatchEvent(event)
+          }, 100)
+        }}
       />
     </>
   )

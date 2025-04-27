@@ -209,6 +209,31 @@ function FlowChart() {
     }
   }, [])
 
+  // Listen for custom selectNode events
+  useEffect(() => {
+    const handleSelectNode = (event: any) => {
+      const { nodeId } = event.detail
+      if (nodeId) {
+        setSelectedNode(nodeId)
+
+        // Also center the view on this node
+        const node = nodes.find((n) => n.id === nodeId)
+        if (node && reactFlowWrapper.current?.reactFlowInstance) {
+          reactFlowWrapper.current.reactFlowInstance.setCenter(
+            node.position.x + 100, // Add offset to center the node
+            node.position.y + 100,
+            { duration: 800 }, // Smooth animation
+          )
+        }
+      }
+    }
+
+    document.addEventListener("selectNode", handleSelectNode)
+    return () => {
+      document.removeEventListener("selectNode", handleSelectNode)
+    }
+  }, [nodes, setSelectedNode])
+
   // Recalculate the flowchart when needed - completely separated from render cycle
   const recalculate = useCallback(() => {
     if (isRecalculatingRef.current) {
@@ -652,6 +677,11 @@ function FlowChart() {
           fitView
           snapToGrid
           snapGrid={[15, 15]}
+          onInit={(instance) => {
+            if (reactFlowWrapper.current) {
+              reactFlowWrapper.current.reactFlowInstance = instance
+            }
+          }}
           defaultEdgeOptions={{
             animated: true,
             markerEnd: {
