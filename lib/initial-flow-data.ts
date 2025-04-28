@@ -5,7 +5,7 @@ export const initialNodes: Node[] = [
   {
     id: "1",
     type: "moduleNode",
-    position: { x: 100, y: 100 },
+    position: { x: 150, y: 150 },
     data: {
       label: "Revenue Data",
       type: "input",
@@ -21,7 +21,7 @@ export const initialNodes: Node[] = [
   {
     id: "2",
     type: "moduleNode",
-    position: { x: 100, y: 250 },
+    position: { x: 150, y: 350 },
     data: {
       label: "Cost Data",
       type: "input",
@@ -37,7 +37,7 @@ export const initialNodes: Node[] = [
   {
     id: "3",
     type: "moduleNode",
-    position: { x: 400, y: 175 },
+    position: { x: 500, y: 250 },
     data: {
       label: "Profit Calculator",
       type: "math",
@@ -53,7 +53,7 @@ export const initialNodes: Node[] = [
   {
     id: "4",
     type: "moduleNode",
-    position: { x: 100, y: 400 },
+    position: { x: 150, y: 550 },
     data: {
       label: "Tax Rate",
       type: "input",
@@ -69,7 +69,7 @@ export const initialNodes: Node[] = [
   {
     id: "5",
     type: "moduleNode",
-    position: { x: 400, y: 325 },
+    position: { x: 500, y: 450 },
     data: {
       label: "Tax Calculator",
       type: "math",
@@ -85,7 +85,7 @@ export const initialNodes: Node[] = [
   {
     id: "6",
     type: "moduleNode",
-    position: { x: 700, y: 250 },
+    position: { x: 850, y: 350 },
     data: {
       label: "Net Profit",
       type: "math",
@@ -101,7 +101,7 @@ export const initialNodes: Node[] = [
   {
     id: "7",
     type: "moduleNode",
-    position: { x: 100, y: 550 },
+    position: { x: 150, y: 750 },
     data: {
       label: "Investment Data",
       type: "input",
@@ -117,7 +117,7 @@ export const initialNodes: Node[] = [
   {
     id: "8",
     type: "moduleNode",
-    position: { x: 400, y: 475 },
+    position: { x: 500, y: 650 },
     data: {
       label: "ROI Calculator",
       type: "math",
@@ -133,7 +133,7 @@ export const initialNodes: Node[] = [
   {
     id: "9",
     type: "moduleNode",
-    position: { x: 700, y: 400 },
+    position: { x: 850, y: 550 },
     data: {
       label: "Performance Threshold",
       type: "filter",
@@ -161,7 +161,7 @@ return {
   {
     id: "10",
     type: "moduleNode",
-    position: { x: 1000, y: 325 },
+    position: { x: 1200, y: 450 },
     data: {
       label: "Business KPI Dashboard",
       type: "output",

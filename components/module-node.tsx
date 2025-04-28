@@ -21,6 +21,7 @@ export function ModuleNode({ id, data, isConnectable }: any) {
   const [localOutputs, setLocalOutputs] = useState<Record<string, any>>({})
   const prevOutputsRef = useRef<any>({})
   const nodeRef = useRef<HTMLDivElement>(null)
+  const [wasImpacted, setWasImpacted] = useState(false)
 
   // Initialize local inputs and outputs from data
   useEffect(() => {
@@ -42,6 +43,12 @@ export function ModuleNode({ id, data, isConnectable }: any) {
     if (outputsChanged) {
       // Show calculating animation
       setIsCalculating(true)
+
+      // Show impact animation if this is not the first calculation
+      if (Object.keys(prevOutputsRef.current).length > 0) {
+        setWasImpacted(true)
+        setTimeout(() => setWasImpacted(false), 3000) // Clear impact highlight after 3 seconds
+      }
 
       // Reset after animation completes
       setTimeout(() => {
@@ -153,51 +160,55 @@ export function ModuleNode({ id, data, isConnectable }: any) {
     document.dispatchEvent(event)
   }
 
+  // Determine if this node was impacted by a change
+  const impactClass = wasImpacted || data.wasImpacted ? "shadow-md border-orange-400 border-2 scale-105" : ""
+  const recalculationClass = data.needsRecalculation ? "border-amber-400 border-2" : ""
+
   return (
     <div ref={nodeRef}>
       <Card
-        className={`w-[320px] ${getNodeColor()} ${isCalculating ? "animate-pulse bg-blue-50" : ""}`}
+        className={`w-[260px] ${getNodeColor()} ${isCalculating ? "animate-pulse bg-blue-50" : ""} ${impactClass} ${recalculationClass} transition-all duration-300`}
         style={nodeStyle}
       >
-        <CardHeader className="p-3 pb-2">
+        <CardHeader className="p-2 pb-1">
           <div className="flex justify-between items-center">
             <div className="flex gap-2 items-center">
-              <CardTitle className="text-sm m-0">{data.label}</CardTitle>
+              <CardTitle className="text-xs m-0">{data.label}</CardTitle>
               {data.needsRecalculation && (
-                <Badge variant="outline" className="bg-amber-100 text-amber-800">
-                  <RefreshCw className="h-3 w-3 mr-1" />
-                  <span className="text-xs">Needs update</span>
+                <Badge variant="outline" className="bg-amber-100 text-amber-800 py-0 px-1">
+                  <RefreshCw className="h-2 w-2 mr-1" />
+                  <span className="text-[10px]">Update</span>
                 </Badge>
               )}
               {isCalculating && (
-                <Badge variant="outline" className="bg-blue-100 text-blue-800">
-                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                  <span className="text-xs">Calculating</span>
+                <Badge variant="outline" className="bg-blue-100 text-blue-800 py-0 px-1">
+                  <RefreshCw className="h-2 w-2 mr-1 animate-spin" />
+                  <span className="text-[10px]">Calc</span>
                 </Badge>
               )}
             </div>
 
-            <Badge variant="secondary" className={`text-xs ${getTypeBadgeColor()}`}>
+            <Badge variant="secondary" className={`text-[10px] py-0 px-1 ${getTypeBadgeColor()}`}>
               {data.type}
             </Badge>
           </div>
         </CardHeader>
 
-        <CardContent className="p-3 pt-0 pb-2">
-          <div className="text-xs text-muted-foreground mb-2 line-clamp-1">{data.description}</div>
+        <CardContent className="p-2 pt-0 pb-1">
+          <div className="text-[10px] text-muted-foreground mb-1 line-clamp-1">{data.description}</div>
 
           {/* Always show key metrics without needing to expand */}
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1 mb-2 bg-slate-50 p-1.5 rounded-sm">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-1 mb-1 bg-slate-50 p-1 rounded-sm">
             {Object.entries(data.outputs || {})
               .slice(0, 2)
               .map(([key, value]) => (
-                <div key={key} className="flex justify-between text-xs">
+                <div key={key} className="flex justify-between text-[10px]">
                   <span className="font-medium text-slate-700">{key}:</span>
                   <span className="font-mono">{typeof value === "number" ? value.toFixed(2) : String(value)}</span>
                 </div>
               ))}
             {Object.keys(data.outputs || {}).length > 2 && (
-              <div className="text-xs text-blue-500 col-span-2 text-center">
+              <div className="text-[10px] text-blue-500 col-span-2 text-center">
                 + {Object.keys(data.outputs || {}).length - 2} more
               </div>
             )}
@@ -206,66 +217,66 @@ export function ModuleNode({ id, data, isConnectable }: any) {
 
         <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
           <CollapsibleTrigger className="w-full">
-            <div className="flex justify-center border-t border-b py-1 hover:bg-slate-50 transition-colors">
+            <div className="flex justify-center border-t border-b py-0.5 hover:bg-slate-50 transition-colors">
               {isExpanded ? (
                 <div className="flex items-center gap-1">
-                  <ChevronDown className="h-4 w-4" />
-                  <span className="text-xs">Hide details</span>
+                  <ChevronDown className="h-3 w-3" />
+                  <span className="text-[10px]">Hide</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-1">
-                  <ChevronRight className="h-4 w-4" />
-                  <span className="text-xs">Show details</span>
+                  <ChevronRight className="h-3 w-3" />
+                  <span className="text-[10px]">Details</span>
                 </div>
               )}
             </div>
           </CollapsibleTrigger>
 
           <CollapsibleContent>
-            <div className="p-3">
+            <div className="p-2">
               {/* Inputs section with quick edit capability */}
-              <div className="mb-3">
-                <div className="flex justify-between items-center mb-2">
-                  <p className="text-xs font-medium">Inputs:</p>
+              <div className="mb-2">
+                <div className="flex justify-between items-center mb-1">
+                  <p className="text-[10px] font-medium">Inputs:</p>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-2 text-xs"
+                    className="h-5 px-1 text-[10px]"
                     onClick={() => setIsEditingInputs(!isEditingInputs)}
                   >
                     {isEditingInputs ? (
                       <>
-                        <Save className="h-3 w-3 mr-1" /> Save
+                        <Save className="h-2 w-2 mr-1" /> Save
                       </>
                     ) : (
                       <>
-                        <Edit className="h-3 w-3 mr-1" /> Edit
+                        <Edit className="h-2 w-2 mr-1" /> Edit
                       </>
                     )}
                   </Button>
                 </div>
 
                 {isEditingInputs ? (
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {inputs.map((key) => (
-                      <div key={key} className="grid grid-cols-3 gap-2 items-center">
-                        <Label htmlFor={`input-${id}-${key}`} className="text-xs">
+                      <div key={key} className="grid grid-cols-3 gap-1 items-center">
+                        <Label htmlFor={`input-${id}-${key}`} className="text-[10px]">
                           {key}:
                         </Label>
                         <Input
                           id={`input-${id}-${key}`}
                           value={localInputs[key]}
                           onChange={(e) => handleInputChange(key, e.target.value)}
-                          className="h-6 text-xs col-span-2"
+                          className="h-5 text-[10px] col-span-2"
                         />
                       </div>
                     ))}
 
-                    <div className="flex justify-end gap-2 mt-2">
+                    <div className="flex justify-end gap-1 mt-1">
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-6 px-2 text-xs"
+                        className="h-5 px-1 text-[10px]"
                         onClick={() => {
                           setLocalInputs({ ...data.inputs })
                           setIsEditingInputs(false)
@@ -273,13 +284,13 @@ export function ModuleNode({ id, data, isConnectable }: any) {
                       >
                         Cancel
                       </Button>
-                      <Button variant="default" size="sm" className="h-6 px-2 text-xs" onClick={saveChanges}>
+                      <Button variant="default" size="sm" className="h-5 px-1 text-[10px]" onClick={saveChanges}>
                         Apply
                       </Button>
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
                     {inputs.map((key) => {
                       const isModified =
                         data.defaultInputs &&
@@ -288,7 +299,7 @@ export function ModuleNode({ id, data, isConnectable }: any) {
                           : JSON.stringify(data.inputs[key]) !== JSON.stringify(data.defaultInputs[key]))
 
                       return (
-                        <div key={key} className="flex justify-between text-xs">
+                        <div key={key} className="flex justify-between text-[10px]">
                           <span className={`text-muted-foreground ${isModified ? "font-medium text-blue-600" : ""}`}>
                             {key}:
                           </span>
@@ -306,9 +317,9 @@ export function ModuleNode({ id, data, isConnectable }: any) {
 
               {/* Formula preview */}
               {data.functionCode && (
-                <div className="mb-3">
-                  <p className="text-xs font-medium mb-1">Formula:</p>
-                  <div className="bg-slate-100 p-2 rounded text-xs font-mono overflow-x-auto whitespace-nowrap">
+                <div className="mb-2">
+                  <p className="text-[10px] font-medium mb-0.5">Formula:</p>
+                  <div className="bg-slate-100 p-1 rounded text-[10px] font-mono overflow-x-auto whitespace-nowrap">
                     {data.functionCode.includes("return")
                       ? data.functionCode.match(/return\s*{([^}]*)}/)?.[1] || "..."
                       : "Complex formula..."}
@@ -318,10 +329,10 @@ export function ModuleNode({ id, data, isConnectable }: any) {
 
               {/* Outputs section */}
               <div>
-                <p className="text-xs font-medium mb-1">Outputs:</p>
-                <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                <p className="text-[10px] font-medium mb-0.5">Outputs:</p>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
                   {outputs.map((key) => (
-                    <div key={key} className="flex justify-between text-xs">
+                    <div key={key} className="flex justify-between text-[10px]">
                       <span className="text-muted-foreground">{key}:</span>
                       <span className="font-mono">
                         {typeof data.outputs[key] === "number"
@@ -334,32 +345,32 @@ export function ModuleNode({ id, data, isConnectable }: any) {
               </div>
 
               {/* Quick actions */}
-              <div className="mt-3 pt-2 border-t flex justify-between">
+              <div className="mt-2 pt-1 border-t flex justify-between">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-6 px-2 text-xs"
+                  className="h-5 px-1 text-[10px]"
                   onClick={() => {
                     if (data.onRecalculate) {
                       data.onRecalculate(id)
                     }
                   }}
                 >
-                  <RefreshCw className="h-3 w-3 mr-1" /> Recalculate
+                  <RefreshCw className="h-2 w-2 mr-1" /> Recalculate
                 </Button>
 
                 {inputsModified && (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-6 px-2 text-xs bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    className="h-5 px-1 text-[10px] bg-blue-50 text-blue-700 hover:bg-blue-100"
                     onClick={() => {
                       if (data.onSaveDefaults) {
                         data.onSaveDefaults(id)
                       }
                     }}
                   >
-                    <Save className="h-3 w-3 mr-1" /> Save as Default
+                    <Save className="h-2 w-2 mr-1" /> Save Default
                   </Button>
                 )}
               </div>
@@ -367,12 +378,12 @@ export function ModuleNode({ id, data, isConnectable }: any) {
           </CollapsibleContent>
         </Collapsible>
 
-        <CardFooter className="p-2 flex justify-between">
+        <CardFooter className="p-1 flex justify-between">
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={openModuleDetails}>
-                  <HelpCircle className="h-4 w-4" />
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={openModuleDetails}>
+                  <HelpCircle className="h-3 w-3" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
@@ -389,10 +400,10 @@ export function ModuleNode({ id, data, isConnectable }: any) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-amber-600 hover:text-amber-800 hover:bg-amber-100"
+                      className="h-6 w-6 text-amber-600 hover:text-amber-800 hover:bg-amber-100"
                       onClick={() => data.onCancel(id)}
                     >
-                      <RotateCcw className="h-4 w-4" />
+                      <RotateCcw className="h-3 w-3" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -405,10 +416,10 @@ export function ModuleNode({ id, data, isConnectable }: any) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-100"
+                      className="h-6 w-6 text-red-500 hover:text-red-700 hover:bg-red-100"
                       onClick={() => data.onDelete(id)}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3 w-3" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -428,7 +439,7 @@ export function ModuleNode({ id, data, isConnectable }: any) {
           type="target"
           position={Position.Left}
           id={`input-${input}`}
-          style={{ top: 60 + index * 20 }}
+          style={{ top: 40 + index * 15, width: 8, height: 8 }}
           isConnectable={isConnectable}
         />
       ))}
@@ -440,7 +451,7 @@ export function ModuleNode({ id, data, isConnectable }: any) {
           type="source"
           position={Position.Right}
           id={`output-${output}`}
-          style={{ top: 60 + index * 20 }}
+          style={{ top: 40 + index * 15, width: 8, height: 8 }}
           isConnectable={isConnectable}
         />
       ))}

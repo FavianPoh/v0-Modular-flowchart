@@ -40,6 +40,18 @@ const nodeTypes = {
 const STORAGE_KEY = "modular-flowchart-data"
 const AUTO_SAVE_INTERVAL = 10000 // 10 seconds auto-save interval
 
+// Define default edge options for thicker arrows
+const defaultEdgeOptions = {
+  style: { strokeWidth: 2.5, stroke: "#b1b1b7" },
+  markerEnd: {
+    type: MarkerType.ArrowClosed,
+    width: 20,
+    height: 20,
+    color: "#b1b1b7",
+  },
+  animated: true,
+}
+
 // This is the inner component that uses ReactFlow hooks
 function FlowChart() {
   // Refs to prevent update loops
@@ -369,9 +381,8 @@ function FlowChart() {
       const newEdge = {
         ...params,
         animated: true,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-        },
+        style: defaultEdgeOptions.style,
+        markerEnd: defaultEdgeOptions.markerEnd,
       }
 
       setEdges((eds) => addEdge(newEdge, eds))
@@ -686,9 +697,8 @@ function FlowChart() {
       sourceHandle,
       targetHandle,
       animated: true,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-      },
+      style: defaultEdgeOptions.style,
+      markerEnd: defaultEdgeOptions.markerEnd,
     }
 
     setEdges((eds) => [...eds, newEdge])
@@ -949,6 +959,7 @@ function FlowChart() {
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           nodeTypes={nodeTypes}
+          defaultEdgeOptions={defaultEdgeOptions}
           fitView
         >
           <Background />

@@ -25,8 +25,6 @@ import {
   Gauge,
   Puzzle,
 } from "lucide-react"
-import { jsPDF } from "jspdf"
-import html2canvas from "html2canvas"
 
 export default function ProductRequirementsDocument() {
   const [activeTab, setActiveTab] = useState("overview")
@@ -45,111 +43,22 @@ export default function ProductRequirementsDocument() {
     }))
   }
 
-  const printToPDF = () => {
-    window.print()
-  }
-
-  const downloadPDF = async () => {
-    const prdElement = document.getElementById("prd-content")
-    if (!prdElement) return
-
-    try {
-      // Show loading state
-      setIsGenerating(true)
-
-      const canvas = await html2canvas(prdElement, {
-        scale: 1.5, // Higher scale for better quality
-        useCORS: true,
-        logging: false,
-        allowTaint: true,
-      })
-
-      const imgData = canvas.toDataURL("image/png")
-
-      // A4 size: 210 x 297 mm
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      })
-
-      const imgWidth = 210
-      const pageHeight = 297
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
-      let heightLeft = imgHeight
-      let position = 0
-
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
-      heightLeft -= pageHeight
-
-      // Add new pages if content is longer than one page
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight
-        pdf.addPage()
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight)
-        heightLeft -= pageHeight
-      }
-
-      pdf.save("Modular_Flowchart_PRD.pdf")
-    } catch (error) {
-      console.error("Error generating PDF:", error)
-      alert("There was an error generating the PDF. Please try again.")
-    } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  // Add a new state for tracking PDF generation
-  const [isGenerating, setIsGenerating] = useState(false)
-
   const downloadPRD = () => {
     // In a real application, this would generate a PDF or other document format
     alert("In a real application, this would download the PRD as a PDF or other document format.")
   }
 
   return (
-    <div id="prd-content" className="container mx-auto py-8 max-w-5xl">
-      {/* Add print-specific styles */}
-      <style jsx global>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
-          #prd-content, #prd-content * {
-            visibility: visible;
-          }
-          #prd-content {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
+    <div className="container mx-auto py-8 max-w-5xl">
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold">Product Requirements Document</h1>
           <p className="text-xl text-muted-foreground">Modular Flowchart Application</p>
         </div>
-        <div className="flex gap-2 no-print">
-          <Button onClick={printToPDF} variant="outline" className="gap-2">
-            <FileText className="h-4 w-4" />
-            Print to PDF
-          </Button>
-          <Button onClick={downloadPDF} className="gap-2" disabled={isGenerating}>
-            {isGenerating ? (
-              <>Generating...</>
-            ) : (
-              <>
-                <Download className="h-4 w-4" />
-                Download PDF
-              </>
-            )}
-          </Button>
-        </div>
+        <Button onClick={downloadPRD} className="gap-2">
+          <Download className="h-4 w-4" />
+          Download PRD
+        </Button>
       </div>
 
       <Card className="mb-8">
@@ -1520,20 +1429,14 @@ export default function ProductRequirementsDocument() {
         </CardContent>
         <CardFooter className="flex justify-between">
           <p className="text-sm text-muted-foreground">Last updated: April 28, 2024</p>
-          <div className="flex gap-2 no-print">
-            <Button variant="outline" className="gap-2" onClick={printToPDF}>
+          <div className="flex gap-2">
+            <Button variant="outline" className="gap-2">
               <FileText className="h-4 w-4" />
-              Print to PDF
+              Print
             </Button>
-            <Button className="gap-2" onClick={downloadPDF} disabled={isGenerating}>
-              {isGenerating ? (
-                <>Generating...</>
-              ) : (
-                <>
-                  <FileDown className="h-4 w-4" />
-                  Download PDF
-                </>
-              )}
+            <Button className="gap-2">
+              <FileDown className="h-4 w-4" />
+              Download PDF
             </Button>
           </div>
         </CardFooter>

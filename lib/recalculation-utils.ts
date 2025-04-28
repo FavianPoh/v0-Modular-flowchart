@@ -112,6 +112,8 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[], changedNodeId?: s
       outputs: JSON.parse(JSON.stringify(node.data.outputs || {})),
       // Preserve function
       function: node.data.function,
+      // Reset impact flag
+      wasImpacted: false,
     },
   }))
 
@@ -219,6 +221,12 @@ export function updateNodeInputs(nodes: Node[], edges: Edge[], changedNodeId?: s
         if (outputsChanged) {
           node.data.outputs = outputs
           updatedNodeIds.add(nodeId)
+
+          // Mark this node as impacted if it's not the original changed node
+          if (nodeId !== changedNodeId) {
+            node.data.wasImpacted = true
+          }
+
           console.log(`Module ${nodeId} (${node.data.label}) output updated`)
         }
       } catch (error) {
