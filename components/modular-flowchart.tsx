@@ -391,8 +391,11 @@ function FlowChart() {
     [setEdges, autoRecalculate, toast],
   )
 
+  // Prevent node click from opening the module details
   const onNodeClick = useCallback((_: React.MouseEvent, node: any) => {
-    setSelectedNode(node.id)
+    // We no longer set the selected node here
+    // This allows the node to be expanded without opening the details panel
+    // setSelectedNode(node.id)
   }, [])
 
   // Delete a node and its connected edges

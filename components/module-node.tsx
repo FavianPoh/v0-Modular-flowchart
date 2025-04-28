@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useRef, useEffect } from "react"
 import { Handle, Position } from "reactflow"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -143,6 +145,13 @@ export function ModuleNode({ id, data, isConnectable }: any) {
   }
 
   const inputsModified = areInputsModified()
+
+  // Open the module details dialog
+  const openModuleDetails = (e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent triggering other click handlers
+    const event = new CustomEvent("selectNode", { detail: { nodeId: id } })
+    document.dispatchEvent(event)
+  }
 
   return (
     <div ref={nodeRef}>
@@ -362,15 +371,7 @@ export function ModuleNode({ id, data, isConnectable }: any) {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => {
-                    const event = new CustomEvent("selectNode", { detail: { nodeId: id } })
-                    document.dispatchEvent(event)
-                  }}
-                >
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={openModuleDetails}>
                   <HelpCircle className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
