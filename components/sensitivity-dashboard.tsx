@@ -1,25 +1,12 @@
 "use client"
 
 import { useState } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { ArrowRight, ExternalLink, RefreshCw, ArrowDown, Save } from "lucide-react"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
-import type { Node, Edge } from "reactflow"
-
-interface SensitivityDashboardProps {
-  isOpen: boolean
-  onClose: () => void
-  nodes: Node[]
-  edges: Edge[]
-  simulationResults: SimulationResult | null
-  isSimulating: boolean
-  onJumpToNode?: (nodeId: string) => void
-  onApplyChanges?: () => void
-}
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { ChevronDown, ChevronRight, ArrowRight, RefreshCw, Check } from "lucide-react"
 
 export interface SimulationResult {
   changedInput: {
@@ -36,21 +23,19 @@ export interface SimulationResult {
     originalOutputs: Record<string, any>
     newOutputs: Record<string, any>
     isTarget?: boolean
-    impactChain?: string[] // Added to track impact chain
   }[]
-  targetMetric?: {
-    nodeId: string
-    nodeName: string
-    metricName: string
-    originalValue: any
-    newValue: any
-    percentChange: number
-  }
-  impactChains?: {
-    path: string[]
-    metrics: string[]
-    percentChanges: number[]
-  }[] // Added to store impact chains
+}
+
+interface SensitivityDashboardProps {
+  isOpen: boolean
+  onClose: () => void
+  nodes: any[]
+  edges: any[]
+  simulationResults: SimulationResult | null
+  isSimulating: boolean
+  onJumpToNode: (nodeId: string) => void
+  onApplyChanges: () => void
+  onReset?: () => void
 }
 
 export function SensitivityDashboard({
@@ -62,11 +47,12 @@ export function SensitivityDashboard({
   isSimulating,
   onJumpToNode,
   onApplyChanges,
+  onReset,
 }: SensitivityDashboardProps) {
-  const [activeTab, setActiveTab] = useState("overview")
+  const [showAffectedModules, setShowAffectedModules] = useState(false)
 
-  // Get module type color
-  const getTypeColor = (type: string) => {
+  // Get color based on module type
+  const getNodeColor = (type: string) => {
     switch (type) {
       case "input":
         return "bg-blue-100 text-blue-800"
@@ -85,446 +71,218 @@ export function SensitivityDashboard({
     }
   }
 
-  // Format value for display
-  const formatValue = (value: any): string => {
-    if (value === undefined || value === null) return "N/A"
-    if (typeof value === "number") {
-      // Check if it's a small decimal or a whole number
-      return Math.abs(value) < 0.01 ? value.toExponential(2) : value.toFixed(2)
-    }
-    if (typeof value === "boolean") return value ? "true" : "false"
-    return String(value)
+  // Calculate percentage change between two values
+  const calculatePercentageChange = (original: number, updated: number) => {
+    if (original === 0) return updated === 0 ? 0 : Number.POSITIVE_INFINITY
+    return ((updated - original) / Math.abs(original)) * 100
   }
 
-  // Calculate percentage change
-  const calculateChange = (oldValue: any, newValue: any): { value: number; percent: number } => {
-    if (
-      oldValue === undefined ||
-      oldValue === null ||
-      newValue === undefined ||
-      newValue === null ||
-      typeof oldValue !== "number" ||
-      typeof newValue !== "number"
-    ) {
-      return { value: 0, percent: 0 }
-    }
-
-    const change = newValue - oldValue
-    const percentChange = oldValue !== 0 ? (change / Math.abs(oldValue)) * 100 : 0
-
-    return { value: change, percent: percentChange }
-  }
-
-  // Build impact chains from affected nodes
-  const buildImpactChains = () => {
-    if (!simulationResults) return []
-
-    // Create a map of node ID to node data for quick lookup
-    const nodeMap = new Map(nodes.map((node) => [node.id, node]))
-
-    // Create a map of edges by source node
-    const edgesBySource: Record<string, Edge[]> = {}
-    edges.forEach((edge) => {
-      if (!edgesBySource[edge.source]) {
-        edgesBySource[edge.source] = []
-      }
-      edgesBySource[edge.source].push(edge)
-    })
-
-    // Start with the changed input node
-    const startNodeId = simulationResults.changedInput.nodeId
-    const chains: { path: string[]; metrics: string[]; percentChanges: number[] }[] = []
-
-    // Function to recursively build chains
-    const buildChain = (
-      nodeId: string,
-      currentPath: string[] = [],
-      currentMetrics: string[] = [],
-      currentChanges: number[] = [],
-    ) => {
-      const node = nodeMap.get(nodeId)
-      if (!node) return
-
-      // Add this node to the current path
-      const newPath = [...currentPath, node.data.label]
-
-      // Find affected node data for this node
-      const affectedNode = simulationResults.affectedNodes.find((n) => n.nodeId === nodeId)
-
-      if (affectedNode) {
-        // For each changed output in this node
-        Object.entries(affectedNode.newOutputs).forEach(([metricName, newValue]) => {
-          const originalValue = affectedNode.originalOutputs[metricName]
-          const change = calculateChange(originalValue, newValue)
-
-          if (Math.abs(change.percent) > 0.01) {
-            // Only consider significant changes
-            const newMetrics = [...currentMetrics, `${node.data.label}.${metricName}`]
-            const newChanges = [...currentChanges, change.percent]
-
-            // Find outgoing edges from this node for this metric
-            const outgoingEdges = edgesBySource[nodeId] || []
-            const relevantEdges = outgoingEdges.filter((edge) => edge.sourceHandle === `output-${metricName}`)
-
-            if (relevantEdges.length > 0) {
-              // Continue the chain for each target node
-              relevantEdges.forEach((edge) => {
-                buildChain(edge.target, newPath, newMetrics, newChanges)
-              })
-            } else {
-              // This is a terminal node in the chain
-              chains.push({
-                path: newPath,
-                metrics: newMetrics,
-                percentChanges: newChanges,
-              })
-            }
-          }
-        })
-      } else if (nodeId === startNodeId) {
-        // This is the starting node, continue with its outgoing edges
-        const outgoingEdges = edgesBySource[nodeId] || []
-        outgoingEdges.forEach((edge) => {
-          const metricName = edge.sourceHandle?.replace("output-", "")
-          if (metricName) {
-            buildChain(
-              edge.target,
-              [node.data.label],
-              [`${node.data.label}.${metricName}`],
-              [0], // No change percentage for the starting node
-            )
-          }
-        })
-      }
-    }
-
-    // Start building chains from the input node
-    buildChain(startNodeId)
-
-    // Sort chains by impact (using the last percentage change in each chain)
-    return chains.sort((a, b) => {
-      const lastChangeA = Math.abs(a.percentChanges[a.percentChanges.length - 1] || 0)
-      const lastChangeB = Math.abs(b.percentChanges[b.percentChanges.length - 1] || 0)
-      return lastChangeB - lastChangeA
-    })
-  }
-
-  if (!simulationResults && !isSimulating) {
+  // Format percentage change with sign and color
+  const formatPercentageChange = (change: number) => {
+    const formattedChange = isFinite(change) ? change.toFixed(2) : "∞"
+    const sign = change > 0 ? "+" : ""
+    const color = change > 0 ? "text-green-600" : change < 0 ? "text-red-600" : "text-gray-600"
     return (
-      <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="sm:max-w-[800px] max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Sensitivity Dashboard</DialogTitle>
-          </DialogHeader>
-          <div className="flex items-center justify-center h-[400px] text-muted-foreground">
-            No simulation results available. Run a sensitivity analysis to see results.
-          </div>
-        </DialogContent>
-      </Dialog>
+      <span className={color}>
+        {sign}
+        {formattedChange}%
+      </span>
     )
   }
 
-  // Build impact chains when we have simulation results
-  const impactChains = simulationResults ? buildImpactChains() : []
+  // Get the most significant changes
+  const getSignificantChanges = () => {
+    if (!simulationResults) return []
+
+    const changes: {
+      nodeId: string
+      nodeName: string
+      nodeType: string
+      metric: string
+      originalValue: number
+      newValue: number
+      percentChange: number
+    }[] = []
+
+    simulationResults.affectedNodes.forEach((node) => {
+      Object.keys(node.newOutputs).forEach((metric) => {
+        const originalValue = node.originalOutputs[metric]
+        const newValue = node.newOutputs[metric]
+
+        // Only include numeric values
+        if (typeof originalValue === "number" && typeof newValue === "number") {
+          const percentChange = calculatePercentageChange(originalValue, newValue)
+          changes.push({
+            nodeId: node.nodeId,
+            nodeName: node.nodeName,
+            nodeType: node.nodeType,
+            metric,
+            originalValue,
+            newValue,
+            percentChange,
+          })
+        }
+      })
+    })
+
+    // Sort by absolute percentage change (descending)
+    return changes.sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange)).slice(0, 5)
+  }
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[800px] max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle>Sensitivity Dashboard</DialogTitle>
-        </DialogHeader>
+    <Sheet open={isOpen} onOpenChange={onClose}>
+      <SheetContent className="w-[400px] sm:w-[600px] overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle>Sensitivity Analysis</SheetTitle>
+          <SheetDescription>See how changing an input affects the outputs across your flowchart</SheetDescription>
+        </SheetHeader>
 
         {isSimulating ? (
-          <div className="flex flex-col items-center justify-center h-[400px] gap-4">
-            <RefreshCw className="h-12 w-12 animate-spin text-primary" />
-            <p className="text-lg">Simulating changes...</p>
-            <p className="text-sm text-muted-foreground">Calculating how changes propagate through the flowchart</p>
+          <div className="flex flex-col items-center justify-center h-64">
+            <RefreshCw className="h-8 w-8 animate-spin text-primary mb-4" />
+            <p className="text-muted-foreground">Running simulation...</p>
           </div>
-        ) : (
-          simulationResults && (
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-              <TabsList className="grid grid-cols-3">
-                <TabsTrigger value="overview">Overview</TabsTrigger>
-                <TabsTrigger value="propagation">Propagation Chains</TabsTrigger>
-                <TabsTrigger value="details">Detailed Changes</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="overview" className="flex-1 overflow-hidden mt-4">
-                <div className="space-y-4">
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Input Change</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{simulationResults.changedInput.nodeName}</span>
-                            <Badge variant="outline" className="bg-blue-50 text-blue-700">
-                              {simulationResults.changedInput.inputName}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2">
-                            <div className="font-mono bg-slate-50 px-2 py-1 rounded">
-                              {formatValue(simulationResults.changedInput.originalValue)}
-                            </div>
-                            <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                            <div className="font-mono bg-slate-50 px-2 py-1 rounded">
-                              {formatValue(simulationResults.changedInput.newValue)}
-                            </div>
-                            <Badge
-                              variant="outline"
-                              className={
-                                simulationResults.changedInput.newValue > simulationResults.changedInput.originalValue
-                                  ? "bg-green-50 text-green-700"
-                                  : "bg-red-50 text-red-700"
-                              }
-                            >
-                              {simulationResults.changedInput.newValue > simulationResults.changedInput.originalValue
-                                ? "+"
-                                : ""}
-                              {calculateChange(
-                                simulationResults.changedInput.originalValue,
-                                simulationResults.changedInput.newValue,
-                              ).percent.toFixed(2)}
-                              %
-                            </Badge>
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex items-center gap-1"
-                          onClick={() => onJumpToNode && onJumpToNode(simulationResults.changedInput.nodeId)}
-                        >
-                          <ExternalLink className="h-3 w-3" /> Jump
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {simulationResults.targetMetric && (
-                    <Card>
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-base">Target Metric Impact</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{simulationResults.targetMetric.nodeName}</span>
-                              <Badge variant="outline" className="bg-purple-50 text-purple-700">
-                                {simulationResults.targetMetric.metricName}
-                              </Badge>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2">
-                              <div className="font-mono bg-slate-50 px-2 py-1 rounded">
-                                {formatValue(simulationResults.targetMetric.originalValue)}
-                              </div>
-                              <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                              <div className="font-mono bg-slate-50 px-2 py-1 rounded">
-                                {formatValue(simulationResults.targetMetric.newValue)}
-                              </div>
-                              <Badge
-                                variant="outline"
-                                className={
-                                  simulationResults.targetMetric.percentChange > 0
-                                    ? "bg-green-50 text-green-700"
-                                    : simulationResults.targetMetric.percentChange < 0
-                                      ? "bg-red-50 text-red-700"
-                                      : "bg-gray-50 text-gray-700"
-                                }
-                              >
-                                {simulationResults.targetMetric.percentChange > 0 ? "+" : ""}
-                                {simulationResults.targetMetric.percentChange.toFixed(2)}%
-                              </Badge>
-                            </div>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex items-center gap-1"
-                            onClick={() => onJumpToNode && onJumpToNode(simulationResults.targetMetric.nodeId)}
-                          >
-                            <ExternalLink className="h-3 w-3" /> Jump
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  <Card>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">Summary</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="mt-4 text-sm text-muted-foreground">
-                        <p>
-                          {simulationResults.affectedNodes.length} module
-                          {simulationResults.affectedNodes.length !== 1 ? "s" : ""} affected by this change
-                        </p>
-                        <p className="mt-1">
-                          {impactChains.length} impact chain
-                          {impactChains.length !== 1 ? "s" : ""} identified
-                        </p>
-                      </div>
-
-                      {onApplyChanges && (
-                        <div className="mt-4">
-                          <Button
-                            onClick={onApplyChanges}
-                            className="w-full flex items-center justify-center gap-2"
-                            variant="default"
-                          >
-                            <Save className="h-4 w-4" /> Apply Changes to Flowchart
-                          </Button>
-                          <p className="text-xs text-muted-foreground text-center mt-2">
-                            This will permanently update the input value and recalculate all affected modules
-                          </p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="propagation" className="flex-1 overflow-hidden mt-4">
-                <ScrollArea className="h-[400px] pr-4">
-                  <div className="space-y-4">
-                    {impactChains.length > 0 ? (
-                      impactChains.map((chain, chainIndex) => (
-                        <Card key={chainIndex}>
-                          <CardHeader className="pb-2">
-                            <CardTitle className="text-base flex items-center justify-between">
-                              <span>Impact Chain #{chainIndex + 1}</span>
-                              <Badge
-                                variant="outline"
-                                className={
-                                  Math.abs(chain.percentChanges[chain.percentChanges.length - 1]) > 5
-                                    ? "bg-red-50 text-red-700"
-                                    : "bg-amber-50 text-amber-700"
-                                }
-                              >
-                                {chain.percentChanges[chain.percentChanges.length - 1] > 0 ? "+" : ""}
-                                {chain.percentChanges[chain.percentChanges.length - 1].toFixed(2)}% Impact
-                              </Badge>
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="flex flex-col items-center gap-2 py-2">
-                              {chain.path.map((nodeName, index) => (
-                                <div key={index} className="flex flex-col items-center">
-                                  {index > 0 && <ArrowDown className="h-5 w-5 text-muted-foreground my-1" />}
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant="outline">{nodeName}</Badge>
-                                    {index < chain.metrics.length && (
-                                      <span className="font-mono text-sm">
-                                        {chain.metrics[index].split(".")[1]}
-                                        {index > 0 && chain.percentChanges[index] !== 0 && (
-                                          <Badge
-                                            variant="outline"
-                                            className={
-                                              chain.percentChanges[index] > 0
-                                                ? "bg-green-50 text-green-700 ml-1"
-                                                : "bg-red-50 text-red-700 ml-1"
-                                            }
-                                          >
-                                            {chain.percentChanges[index] > 0 ? "+" : ""}
-                                            {chain.percentChanges[index].toFixed(2)}%
-                                          </Badge>
-                                        )}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))
-                    ) : (
-                      <div className="flex items-center justify-center h-[200px] text-muted-foreground">
-                        No impact chains identified
-                      </div>
-                    )}
+        ) : simulationResults ? (
+          <div className="mt-6 space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Input Change</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Module:</span>
+                    <span className="text-sm font-medium">{simulationResults.changedInput.nodeName}</span>
                   </div>
-                </ScrollArea>
-              </TabsContent>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Input:</span>
+                    <span className="text-sm font-medium">{simulationResults.changedInput.inputName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Original Value:</span>
+                    <span className="text-sm font-mono">
+                      {typeof simulationResults.changedInput.originalValue === "number"
+                        ? simulationResults.changedInput.originalValue.toFixed(2)
+                        : String(simulationResults.changedInput.originalValue)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">New Value:</span>
+                    <span className="text-sm font-mono">
+                      {typeof simulationResults.changedInput.newValue === "number"
+                        ? simulationResults.changedInput.newValue.toFixed(2)
+                        : String(simulationResults.changedInput.newValue)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Change:</span>
+                    <span className="text-sm font-mono">
+                      {typeof simulationResults.changedInput.originalValue === "number" &&
+                      typeof simulationResults.changedInput.newValue === "number"
+                        ? formatPercentageChange(
+                            calculatePercentageChange(
+                              simulationResults.changedInput.originalValue,
+                              simulationResults.changedInput.newValue,
+                            ),
+                          )
+                        : "N/A"}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-              <TabsContent value="details" className="flex-1 overflow-hidden mt-4">
-                <ScrollArea className="h-[400px] pr-4">
-                  <div className="space-y-4">
-                    {simulationResults.affectedNodes.map((node, index) => (
-                      <Card key={index} className={node.isTarget ? "border-2 border-primary" : ""}>
-                        <CardHeader className="pb-2">
-                          <div className="flex items-center justify-between">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Impact Summary</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Modules Affected:</span>
+                    <span className="text-sm font-medium">{simulationResults.affectedNodes.length}</span>
+                  </div>
+
+                  {/* New expandable section for affected modules */}
+                  <Collapsible
+                    open={showAffectedModules}
+                    onOpenChange={setShowAffectedModules}
+                    className="border rounded-md mt-2"
+                  >
+                    <CollapsibleTrigger className="flex items-center justify-between w-full p-2 hover:bg-slate-50">
+                      <span className="text-sm font-medium">Affected Modules</span>
+                      {showAffectedModules ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="p-2 border-t">
+                      <div className="space-y-2 max-h-60 overflow-y-auto">
+                        {simulationResults.affectedNodes.map((node) => (
+                          <div
+                            key={node.nodeId}
+                            className="flex items-center justify-between p-2 rounded-md hover:bg-slate-50 cursor-pointer"
+                            onClick={() => onJumpToNode(node.nodeId)}
+                          >
                             <div className="flex items-center gap-2">
-                              <CardTitle className="text-base">{node.nodeName}</CardTitle>
-                              <Badge variant="outline" className={getTypeColor(node.nodeType)}>
+                              <Badge className={getNodeColor(node.nodeType)} variant="secondary">
                                 {node.nodeType}
                               </Badge>
-                              {node.isTarget && (
-                                <Badge variant="outline" className="bg-purple-50 text-purple-700">
-                                  Target
-                                </Badge>
-                              )}
+                              <span className="text-sm">{node.nodeName}</span>
                             </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="flex items-center gap-1"
-                              onClick={() => onJumpToNode && onJumpToNode(node.nodeId)}
-                            >
-                              <ExternalLink className="h-3 w-3" /> Jump
-                            </Button>
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </div>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="space-y-2">
-                            {Object.keys(node.originalOutputs).map((key) => {
-                              const change = calculateChange(node.originalOutputs[key], node.newOutputs[key])
-                              return (
-                                <div key={key} className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2">
-                                  <div>
-                                    <div className="text-xs text-muted-foreground">{key} (before)</div>
-                                    <div className="font-mono bg-slate-50 px-2 py-1 rounded text-sm">
-                                      {formatValue(node.originalOutputs[key])}
-                                    </div>
-                                  </div>
-                                  <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                                  <div>
-                                    <div className="text-xs text-muted-foreground">{key} (after)</div>
-                                    <div className="font-mono bg-slate-50 px-2 py-1 rounded text-sm">
-                                      {formatValue(node.newOutputs[key])}
-                                    </div>
-                                  </div>
-                                  <Badge
-                                    variant="outline"
-                                    className={
-                                      change.percent > 0
-                                        ? "bg-green-50 text-green-700"
-                                        : change.percent < 0
-                                          ? "bg-red-50 text-red-700"
-                                          : "bg-gray-50 text-gray-700"
-                                    }
-                                  >
-                                    {change.percent > 0 ? "+" : ""}
-                                    {change.percent.toFixed(2)}%
-                                  </Badge>
-                                </div>
-                              )
-                            })}
+                        ))}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+
+                  <div className="mt-4">
+                    <h4 className="text-sm font-medium mb-2">Most Significant Changes</h4>
+                    <div className="space-y-2">
+                      {getSignificantChanges().map((change, index) => (
+                        <div
+                          key={`${change.nodeId}-${change.metric}`}
+                          className="p-2 bg-slate-50 rounded-md cursor-pointer hover:bg-slate-100"
+                          onClick={() => onJumpToNode(change.nodeId)}
+                        >
+                          <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              <Badge className={getNodeColor(change.nodeType)} variant="secondary">
+                                {change.nodeType}
+                              </Badge>
+                              <span className="text-sm font-medium">{change.nodeName}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">{change.metric}</span>
                           </div>
-                        </CardContent>
-                      </Card>
-                    ))}
+                          <div className="flex justify-between mt-1">
+                            <span className="text-xs text-muted-foreground">
+                              {change.originalValue.toFixed(2)} <ArrowRight className="inline h-3 w-3" />{" "}
+                              {change.newValue.toFixed(2)}
+                            </span>
+                            <span className="text-xs font-medium">{formatPercentageChange(change.percentChange)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </ScrollArea>
-              </TabsContent>
-            </Tabs>
-          )
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={onApplyChanges} className="gap-2">
+                <Check className="h-4 w-4" /> Apply Changes
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-64">
+            <p className="text-muted-foreground">No simulation results available.</p>
+            <p className="text-muted-foreground">Run a sensitivity analysis to see results.</p>
+          </div>
         )}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   )
 }

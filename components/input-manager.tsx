@@ -1,197 +1,160 @@
 "use client"
 
 import { useState } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Plus, Trash2, MoveVertical } from "lucide-react"
-import { Card, CardContent } from "@/components/ui/card"
-import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
+import { Input } from "@/components/ui/input"
+import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface InputManagerProps {
-  inputs: Record<string, any> // Changed from string[] to Record<string, any>
-  onChange: (inputs: Record<string, any>) => void // Changed return type
+  inputs: Record<string, any>
+  onChange: (inputs: Record<string, any>) => void
   defaultInputs?: Record<string, any>
   showModifiedIndicator?: boolean
 }
 
-export function InputManager({ inputs, onChange, defaultInputs, showModifiedIndicator }: InputManagerProps) {
-  const [newInputName, setNewInputName] = useState("")
-  const [newInputValue, setNewInputValue] = useState("")
-  const [error, setError] = useState("")
+export function InputManager({ inputs, onChange, defaultInputs, showModifiedIndicator = false }: InputManagerProps) {
+  const [localInputs, setLocalInputs] = useState<Record<string, any>>(inputs)
 
-  const handleAddInput = () => {
-    if (!newInputName.trim()) {
-      setError("Input name cannot be empty")
-      return
+  // Handle input change
+  const handleInputChange = (key: string, value: any) => {
+    // Convert to number if possible
+    const parsedValue = !isNaN(Number.parseFloat(value)) ? Number.parseFloat(value) : value
+
+    const newInputs = {
+      ...localInputs,
+      [key]: parsedValue,
     }
 
-    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(newInputName)) {
-      setError("Input name must start with a letter and contain only letters, numbers, and underscores")
-      return
-    }
-
-    if (inputs[newInputName] !== undefined) {
-      setError("Input name already exists")
-      return
-    }
-
-    const updatedInputs = {
-      ...inputs,
-      [newInputName]: newInputValue || 0,
-    }
-
-    onChange(updatedInputs)
-    setNewInputName("")
-    setNewInputValue("")
-    setError("")
-  }
-
-  const handleRemoveInput = (name: string) => {
-    const { [name]: _, ...rest } = inputs
-    onChange(rest)
-  }
-
-  const handleInputChange = (name: string, value: string) => {
-    onChange({
-      ...inputs,
-      [name]: value,
-    })
-  }
-
-  const handleRenameInput = (oldName: string, newName: string) => {
-    if (!newName.trim()) {
-      return // Don't rename to empty string
-    }
-
-    if (oldName === newName) return
-
-    // Only validate if the name actually changed
-    if (oldName !== newName) {
-      if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(newName)) {
-        setError("Input name must start with a letter and contain only letters, numbers, and underscores")
-        return
-      }
-
-      if (inputs[newName] !== undefined) {
-        setError("Input name already exists")
-        return
-      }
-    }
-
-    // Create a new object with the renamed key
-    const newInputs: Record<string, any> = {}
-    Object.entries(inputs).forEach(([key, value]) => {
-      if (key === oldName) {
-        newInputs[newName] = value
-      } else {
-        newInputs[key] = value
-      }
-    })
-
+    setLocalInputs(newInputs)
     onChange(newInputs)
-    setError("")
   }
 
-  const handleDragEnd = (result: any) => {
-    if (!result.destination) return
+  // Check if an input has been modified from its default
+  const isInputModified = (key: string) => {
+    if (!defaultInputs || defaultInputs[key] === undefined) return false
 
-    const items = Object.entries(inputs)
-    const [reorderedItem] = items.splice(result.source.index, 1)
-    items.splice(result.destination.index, 0, reorderedItem)
+    if (typeof localInputs[key] === "number" && typeof defaultInputs[key] === "number") {
+      return Math.abs(localInputs[key] - defaultInputs[key]) > 0.000001
+    }
+    return JSON.stringify(localInputs[key]) !== JSON.stringify(defaultInputs[key])
+  }
 
-    const reorderedInputs = Object.fromEntries(items)
-    onChange(reorderedInputs)
+  // Render the appropriate input control based on the value type
+  const renderInputControl = (key: string, value: any) => {
+    const isModified = showModifiedIndicator && isInputModified(key)
+
+    if (typeof value === "number") {
+      // For numbers, render a slider for values between 0-100, otherwise a number input
+      if (value >= 0 && value <= 100 && Number.isInteger(value)) {
+        return (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+                {key}
+                {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+              </Label>
+              <span className="text-sm font-mono">{value}</span>
+            </div>
+            <Slider
+              id={`input-${key}`}
+              value={[value]}
+              min={0}
+              max={100}
+              step={1}
+              onValueChange={(values) => handleInputChange(key, values[0])}
+            />
+          </div>
+        )
+      } else {
+        return (
+          <div className="grid grid-cols-3 items-center gap-2">
+            <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+              {key}
+              {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+            </Label>
+            <Input
+              id={`input-${key}`}
+              type="number"
+              value={value}
+              onChange={(e) => handleInputChange(key, e.target.value)}
+              className="col-span-2"
+            />
+          </div>
+        )
+      }
+    } else if (typeof value === "boolean") {
+      return (
+        <div className="flex items-center justify-between">
+          <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+            {key}
+            {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+          </Label>
+          <Switch id={`input-${key}`} checked={value} onCheckedChange={(checked) => handleInputChange(key, checked)} />
+        </div>
+      )
+    } else if (typeof value === "string") {
+      // Check if it's a select option (e.g., "option1", "option2", "option3")
+      if (value.startsWith("option") && !isNaN(Number.parseInt(value.slice(6)))) {
+        return (
+          <div className="grid grid-cols-3 items-center gap-2">
+            <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+              {key}
+              {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+            </Label>
+            <Select value={value} onValueChange={(value) => handleInputChange(key, value)}>
+              <SelectTrigger id={`input-${key}`} className="col-span-2">
+                <SelectValue placeholder="Select option" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="option1">Option 1</SelectItem>
+                <SelectItem value="option2">Option 2</SelectItem>
+                <SelectItem value="option3">Option 3</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )
+      } else {
+        return (
+          <div className="grid grid-cols-3 items-center gap-2">
+            <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+              {key}
+              {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+            </Label>
+            <Input
+              id={`input-${key}`}
+              value={value}
+              onChange={(e) => handleInputChange(key, e.target.value)}
+              className="col-span-2"
+            />
+          </div>
+        )
+      }
+    } else {
+      // For other types, render a simple text input
+      return (
+        <div className="grid grid-cols-3 items-center gap-2">
+          <Label htmlFor={`input-${key}`} className={`text-sm ${isModified ? "text-blue-600 font-medium" : ""}`}>
+            {key}
+            {isModified && <span className="ml-1 h-2 w-2 rounded-full bg-blue-500 inline-block"></span>}
+          </Label>
+          <Input
+            id={`input-${key}`}
+            value={String(value)}
+            onChange={(e) => handleInputChange(key, e.target.value)}
+            className="col-span-2"
+          />
+        </div>
+      )
+    }
   }
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <Label>Module Inputs</Label>
-        <DragDropContext onDragEnd={handleDragEnd}>
-          <Droppable droppableId="inputs">
-            {(provided) => (
-              <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-2">
-                {Object.entries(inputs).map(([name, value], index) => {
-                  // Check if this value is modified from default
-                  const isModified =
-                    showModifiedIndicator &&
-                    defaultInputs &&
-                    (typeof value === "number" && typeof defaultInputs[name] === "number"
-                      ? Math.abs(value - defaultInputs[name]) > 0.000001
-                      : JSON.stringify(value) !== JSON.stringify(defaultInputs[name]))
-
-                  return (
-                    <Draggable key={name} draggableId={name} index={index}>
-                      {(provided) => (
-                        <Card ref={provided.innerRef} {...provided.draggableProps} className="border border-gray-200">
-                          <CardContent className="p-2 flex items-center gap-2">
-                            <div {...provided.dragHandleProps} className="cursor-move">
-                              <MoveVertical className="h-4 w-4 text-gray-400" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 flex-1">
-                              <Input
-                                value={name}
-                                onChange={(e) => handleRenameInput(name, e.target.value)}
-                                placeholder="Name"
-                                className="text-sm"
-                                onBlur={(e) => {
-                                  // If the input is invalid, revert to the original name
-                                  if (
-                                    !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(e.target.value) ||
-                                    inputs[e.target.value] !== undefined
-                                  ) {
-                                    e.target.value = name
-                                  }
-                                }}
-                              />
-                              <Input
-                                value={value}
-                                onChange={(e) => handleInputChange(name, e.target.value)}
-                                placeholder="Value"
-                                className="text-sm"
-                              />
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-100"
-                              onClick={() => handleRemoveInput(name)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </CardContent>
-                        </Card>
-                      )}
-                    </Draggable>
-                  )
-                })}
-                {provided.placeholder}
-              </div>
-            )}
-          </Droppable>
-        </DragDropContext>
-      </div>
-
-      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
-        <Input
-          value={newInputName}
-          onChange={(e) => setNewInputName(e.target.value)}
-          placeholder="New input name"
-          className="text-sm"
-        />
-        <Input
-          value={newInputValue}
-          onChange={(e) => setNewInputValue(e.target.value)}
-          placeholder="Default value"
-          className="text-sm"
-        />
-        <Button variant="outline" size="sm" onClick={handleAddInput} className="flex items-center gap-1">
-          <Plus className="h-4 w-4" /> Add
-        </Button>
-      </div>
-
-      {error && <p className="text-sm text-red-500">{error}</p>}
+      {Object.entries(inputs).map(([key, value]) => (
+        <div key={key}>{renderInputControl(key, value)}</div>
+      ))}
     </div>
   )
 }

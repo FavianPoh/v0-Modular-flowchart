@@ -3,14 +3,26 @@
 import type React from "react"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { executeModule } from "@/lib/recalculation-utils"
-import { RotateCcw, Code, Settings, Activity, Info, ArrowRight, RefreshCw, FileText, Sliders, Save } from "lucide-react"
+import {
+  RotateCcw,
+  Code,
+  Settings,
+  Activity,
+  Info,
+  ArrowRight,
+  RefreshCw,
+  FileText,
+  Sliders,
+  Save,
+  X,
+} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { InputManager } from "@/components/input-manager"
 import { FormulaBuilder } from "@/components/formula-builder"
@@ -61,7 +73,7 @@ export function ModuleDetails({
   const [isMetricDrilldownOpen, setIsMetricDrilldownOpen] = useState(false)
   const [selectedMetric, setSelectedMetric] = useState<string>("")
   const [selectedInputForAnalysis, setSelectedInputForAnalysis] = useState<string>("")
-  const [sensitivityPercentage, setSensitivityPercentage] = useState(10)
+  const [sensitivityPercentage, setSensitivityPercentage] = useState(0)
   const [isSimulating, setIsSimulating] = useState(false)
   const [simulationResults, setSimulationResults] = useState<SimulationResult | null>(null)
   const [isDashboardOpen, setIsDashboardOpen] = useState(false)
@@ -69,6 +81,7 @@ export function ModuleDetails({
   const [inputValuesModified, setInputValuesModified] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isUnsavedChangesDialogOpen, setIsUnsavedChangesDialogOpen] = useState(false)
+  const [inputMetricGroups, setInputMetricGroups] = useState<Record<string, string[]>>({})
   const { toast } = useToast()
 
   // Refs to prevent update loops
@@ -92,6 +105,16 @@ export function ModuleDetails({
   const runSensitivityAnalysisRef = useRef<() => void>(() => {})
   const applySimulationResultsRef = useRef<() => void>(() => {})
   const saveAsDefaultRef = useRef<() => void>(() => {})
+
+  // Initialize refs with default values
+  const debouncedUpdateNodeDataRefInit = useRef<(data: any) => void>(() => {})
+  const handleInputChangeRefInit = useRef<(newInputs: Record<string, any>) => void>(() => {})
+  const handleFunctionCodeChangeRefInit = useRef<(formula: string, code: string) => void>(() => {})
+  const handleCodeChangeRefInit = useRef<(e: React.ChangeEvent<HTMLTextAreaElement>) => void>(() => {})
+  const resetInputsRefInit = useRef<() => void>(() => {})
+  const runSensitivityAnalysisRefInit = useRef<() => void>(() => {})
+  const applySimulationResultsRefInit = useRef<() => void>(() => {})
+  const saveAsDefaultRefInit = useRef<() => void>(() => {})
 
   // Find connected nodes (both incoming and outgoing)
   const connectedNodes = nodes.filter((n) => {
@@ -180,8 +203,48 @@ export function ModuleDetails({
       setInitialFormula("")
       lastFunctionCodeRef.current = ""
       setHasUnsavedChanges(false)
+      setInputMetricGroups({})
     }
   }, [nodeId])
+
+  // Analyze function code to determine which inputs affect which outputs
+  const analyzeInputOutputRelationships = useCallback((code: string, inputKeys: string[], outputKeys: string[]) => {
+    const relationships: Record<string, string[]> = {}
+
+    // Initialize with empty arrays for each output
+    outputKeys.forEach((output) => {
+      relationships[output] = []
+    })
+
+    // Simple analysis - check if input appears in the same line as output
+    inputKeys.forEach((input) => {
+      const inputPattern = new RegExp(`inputs\\.${input}`, "g")
+
+      outputKeys.forEach((output) => {
+        // Look for patterns like "output: ... inputs.inputName ..."
+        const outputPattern = new RegExp(`${output}\\s*:\\s*[^;]*inputs\\.${input}`, "g")
+
+        // Also check for variables that might use the input and then be used in the output
+        const variablePattern = new RegExp(
+          `const\\s+\\w+\\s*=\\s*[^;]*inputs\\.${input}[^;]*;[\\s\\S]*${output}\\s*:`,
+          "g",
+        )
+
+        if (
+          outputPattern.test(code) ||
+          variablePattern.test(code) ||
+          // For simple modules, if there's only one output, assume all inputs affect it
+          (outputKeys.length === 1 && inputPattern.test(code))
+        ) {
+          if (!relationships[output].includes(input)) {
+            relationships[output].push(input)
+          }
+        }
+      })
+    })
+
+    return relationships
+  }, [])
 
   // Initialize component with node data
   useEffect(() => {
@@ -212,6 +275,19 @@ export function ModuleDetails({
           if (match && match[1]) {
             setInitialFormula(match[1])
           }
+
+          // Analyze which inputs affect which outputs
+          const inputKeys = Object.keys(nodeInputs)
+          const outputKeys = Object.keys(nodeOutputs)
+          const relationships = analyzeInputOutputRelationships(node.data.functionCode, inputKeys, outputKeys)
+
+          // Invert the relationships to get input -> outputs mapping
+          const inputToOutputs: Record<string, string[]> = {}
+          inputKeys.forEach((input) => {
+            inputToOutputs[input] = outputKeys.filter((output) => relationships[output].includes(input))
+          })
+
+          setInputMetricGroups(inputToOutputs)
         }
       } catch (error) {
         console.error("Error initializing module details:", error)
@@ -223,7 +299,7 @@ export function ModuleDetails({
         clearTimeout(timeoutRef.current)
       }
     }
-  }, [node])
+  }, [node, analyzeInputOutputRelationships])
 
   // Function to trigger a full flowchart recalculation
   const triggerFullRecalculation = useCallback(() => {
@@ -361,13 +437,27 @@ export function ModuleDetails({
               functionCode: code,
             },
           }
-          setOutputs(executeModule(updatedNode.data))
+          const newOutputs = executeModule(updatedNode.data)
+          setOutputs(newOutputs)
+
+          // Re-analyze input-output relationships
+          const inputKeys = Object.keys(inputs)
+          const outputKeys = Object.keys(newOutputs)
+          const relationships = analyzeInputOutputRelationships(code, inputKeys, outputKeys)
+
+          // Invert the relationships to get input -> outputs mapping
+          const inputToOutputs: Record<string, string[]> = {}
+          inputKeys.forEach((input) => {
+            inputToOutputs[input] = outputKeys.filter((output) => relationships[output].includes(input))
+          })
+
+          setInputMetricGroups(inputToOutputs)
         }
       } catch (error) {
         console.error("Error creating function:", error)
       }
     }
-  }, [node])
+  }, [node, inputs, analyzeInputOutputRelationships])
 
   const handleFunctionCodeChange = useCallback((formula: string, code: string) => {
     _handleFunctionCodeChange.current?.(formula, code)
@@ -405,13 +495,27 @@ export function ModuleDetails({
               functionCode: code,
             },
           }
-          setOutputs(executeModule(updatedNode.data))
+          const newOutputs = executeModule(updatedNode.data)
+          setOutputs(newOutputs)
+
+          // Re-analyze input-output relationships
+          const inputKeys = Object.keys(inputs)
+          const outputKeys = Object.keys(newOutputs)
+          const relationships = analyzeInputOutputRelationships(code, inputKeys, outputKeys)
+
+          // Invert the relationships to get input -> outputs mapping
+          const inputToOutputs: Record<string, string[]> = {}
+          inputKeys.forEach((input) => {
+            inputToOutputs[input] = outputKeys.filter((output) => relationships[output].includes(input))
+          })
+
+          setInputMetricGroups(inputToOutputs)
         }
       } catch (error) {
         console.error("Error creating function:", error)
       }
     }
-  }, [node])
+  }, [node, inputs, analyzeInputOutputRelationships])
 
   const handleCodeChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     _handleCodeChange.current?.(e)
@@ -450,6 +554,15 @@ export function ModuleDetails({
   const resetInputs = useCallback(() => {
     _resetInputs.current?.()
   }, [])
+
+  const resetSensitivityPercentage = useCallback(() => {
+    setSensitivityPercentage(0)
+    toast({
+      title: "Percentage reset",
+      description: "Input change percentage has been reset to 0%",
+      duration: 2000,
+    })
+  }, [toast])
 
   // Save current inputs as default values
   const saveAsDefault = useCallback(() => {
@@ -577,6 +690,7 @@ export function ModuleDetails({
     _applySimulationResults.current?.()
   }, [])
 
+  // Add a resetSensitivityAnalysis function to clear the simulation results and close the dashboard
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -748,7 +862,7 @@ export function ModuleDetails({
           const nodeMap = new Map(clonedNodes.map((node) => [node.id, node]))
 
           // Find the node to modify
-          const targetNodeId = nodeId
+          const targetNodeId = nodeId // Use the current node's ID
           const targetNode = nodeMap.get(targetNodeId)
           if (!targetNode) {
             setIsSimulating(false)
@@ -986,13 +1100,105 @@ export function ModuleDetails({
     }
   }, [node, nodeId, inputs, functionCode, updateNodeData, triggerFullRecalculation, toast])
 
+  // Group inputs by the metrics they impact
+  const renderGroupedInputs = () => {
+    // Get all outputs
+    const outputKeys = Object.keys(outputs)
+
+    // If we don't have input-metric relationships or there are no outputs, render inputs normally
+    if (Object.keys(inputMetricGroups).length === 0 || outputKeys.length === 0) {
+      return (
+        <div className="col-span-2">
+          <InputManager
+            inputs={inputs}
+            onChange={handleInputChange}
+            defaultInputs={node.data.defaultInputs}
+            showModifiedIndicator={true}
+          />
+        </div>
+      )
+    }
+
+    // Create groups based on outputs
+    const groups: Record<string, string[]> = {}
+
+    // First, add all outputs as groups
+    outputKeys.forEach((output) => {
+      groups[output] = []
+    })
+
+    // Add a "Multiple" group for inputs that affect multiple outputs
+    groups["Multiple"] = []
+
+    // Add an "Ungrouped" for inputs that don't have clear relationships
+    groups["Ungrouped"] = []
+
+    // Assign inputs to groups
+    Object.keys(inputs).forEach((input) => {
+      const affectedOutputs = inputMetricGroups[input] || []
+
+      if (affectedOutputs.length === 0) {
+        // If no clear relationship, add to ungrouped
+        groups["Ungrouped"].push(input)
+      } else if (affectedOutputs.length === 1) {
+        // If affects only one output, add to that output's group
+        groups[affectedOutputs[0]].push(input)
+      } else {
+        // If affects multiple outputs, add to the "Multiple" group
+        groups["Multiple"].push(input)
+      }
+    })
+
+    // Filter out empty groups
+    const nonEmptyGroups = Object.entries(groups).filter(([_, inputs]) => inputs.length > 0)
+
+    return nonEmptyGroups.map(([groupName, groupInputs]) => (
+      <div key={groupName} className="space-y-2">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-medium">
+            {groupName === "Multiple"
+              ? "Multiple Metrics"
+              : groupName === "Ungrouped"
+                ? "Other Inputs"
+                : `Affects ${groupName}`}
+          </h3>
+          {groupName !== "Multiple" && groupName !== "Ungrouped" && (
+            <Badge variant="outline" className="bg-blue-50 text-blue-700">
+              {groupName}
+            </Badge>
+          )}
+        </div>
+        <Card className="p-3">
+          <InputManager
+            inputs={Object.fromEntries(groupInputs.map((input) => [input, inputs[input]]))}
+            onChange={(newInputs) => {
+              // Merge with existing inputs
+              handleInputChange({ ...inputs, ...newInputs })
+            }}
+            defaultInputs={
+              node.data.defaultInputs
+                ? Object.fromEntries(groupInputs.map((input) => [input, node.data.defaultInputs[input]]))
+                : undefined
+            }
+            showModifiedIndicator={true}
+          />
+        </Card>
+      </div>
+    ))
+  }
+
   return (
     <>
-      <Sheet open={!!nodeId} onOpenChange={handleClose}>
-        <SheetContent className="w-[400px] sm:w-[600px] overflow-y-auto">
-          <SheetHeader>
+      <Dialog open={!!nodeId} onOpenChange={handleClose}>
+        <DialogContent className="max-w-[80vw] w-[900px] max-h-[90vh] overflow-y-auto">
+          <div className="absolute right-4 top-4">
+            <Button variant="ghost" size="icon" onClick={handleClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <DialogHeader>
             <div className="flex items-center gap-2">
-              <SheetTitle>{node.data.label}</SheetTitle>
+              <DialogTitle>{node.data.label}</DialogTitle>
               <Badge className={getTypeColor(node.data.type)}>
                 {node.data.type.charAt(0).toUpperCase() + node.data.type.slice(1)}
               </Badge>
@@ -1012,8 +1218,8 @@ export function ModuleDetails({
                 </Badge>
               )}
             </div>
-            <SheetDescription>{node.data.description}</SheetDescription>
-          </SheetHeader>
+            <DialogDescription>{node.data.description}</DialogDescription>
+          </DialogHeader>
 
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="outline" onClick={handleClose}>
@@ -1025,7 +1231,7 @@ export function ModuleDetails({
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
-            <TabsList className="grid grid-cols-5">
+            <TabsList className="grid grid-cols-5 w-full">
               <TabsTrigger value="overview" className="flex items-center gap-2">
                 <Info className="h-4 w-4" /> Overview
               </TabsTrigger>
@@ -1044,50 +1250,66 @@ export function ModuleDetails({
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4 mt-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Module Purpose</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm">{node.data.description}</p>
+              <div className="grid grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Module Purpose</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm">{node.data.description}</p>
 
-                  <div className="mt-4">
-                    <h4 className="text-sm font-medium mb-2">Data Flow</h4>
-                    <div className="bg-slate-50 p-3 rounded-md">
-                      <div className="flex flex-col gap-2">
-                        <div>
-                          <span className="text-xs font-medium text-muted-foreground">Inputs:</span>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {Object.keys(inputs).map((key) => (
-                              <Badge key={key} variant="outline" className="text-xs">
-                                {key}
-                              </Badge>
-                            ))}
+                    <div className="mt-4">
+                      <h4 className="text-sm font-medium mb-2">Data Flow</h4>
+                      <div className="bg-slate-50 p-3 rounded-md">
+                        <div className="flex flex-col gap-2">
+                          <div>
+                            <span className="text-xs font-medium text-muted-foreground">Inputs:</span>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {Object.keys(inputs).map((key) => (
+                                <Badge key={key} variant="outline" className="text-xs">
+                                  {key}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="flex justify-center my-1">
-                          <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                        </div>
+                          <div className="flex justify-center my-1">
+                            <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                          </div>
 
-                        <div>
-                          <span className="text-xs font-medium text-muted-foreground">Outputs:</span>
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {Object.keys(outputs).map((key) => (
-                              <Badge key={key} variant="outline" className="text-xs">
-                                {key}
-                              </Badge>
-                            ))}
+                          <div>
+                            <span className="text-xs font-medium text-muted-foreground">Outputs:</span>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {Object.keys(outputs).map((key) => (
+                                <Badge key={key} variant="outline" className="text-xs">
+                                  {key}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>
                     </div>
-                  </div>
 
-                  {connectedNodes.length > 0 && (
                     <div className="mt-4">
-                      <h4 className="text-sm font-medium mb-2">Connected Modules</h4>
-                      <div className="grid gap-2">
+                      <h4 className="text-sm font-medium mb-2">Function Summary</h4>
+                      <div className="bg-slate-50 p-3 rounded-md">
+                        <code className="text-xs whitespace-pre-wrap">
+                          {node.data.functionCode.split("\n").slice(0, 3).join("\n")}
+                          {node.data.functionCode.split("\n").length > 3 ? "..." : ""}
+                        </code>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {connectedNodes.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Connected Modules</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-2 max-h-[300px] overflow-y-auto">
                         {connectedNodes.map((connectedNode) => (
                           <div key={connectedNode.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-md">
                             <Badge className={getTypeColor(connectedNode.data.type)} variant="secondary">
@@ -1102,20 +1324,10 @@ export function ModuleDetails({
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
-
-                  <div className="mt-4">
-                    <h4 className="text-sm font-medium mb-2">Function Summary</h4>
-                    <div className="bg-slate-50 p-3 rounded-md">
-                      <code className="text-xs whitespace-pre-wrap">
-                        {node.data.functionCode.split("\n").slice(0, 3).join("\n")}
-                        {node.data.functionCode.split("\n").length > 3 ? "..." : ""}
-                      </code>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             </TabsContent>
 
             <TabsContent value="inputs" className="space-y-4 mt-4">
@@ -1152,16 +1364,12 @@ export function ModuleDetails({
                 </div>
               </div>
 
-              <InputManager
-                inputs={inputs}
-                onChange={handleInputChange}
-                defaultInputs={node.data.defaultInputs}
-                showModifiedIndicator={true}
-              />
+              {/* Render inputs grouped by the metrics they impact */}
+              <div className="grid grid-cols-2 gap-6">{renderGroupedInputs()}</div>
 
               <div className="border-t pt-4 mt-4">
                 <h3 className="text-sm font-medium mb-3">Sensitivity Analysis</h3>
-                <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Select Input to Analyze:</Label>
                     <Select value={selectedInputForAnalysis} onValueChange={setSelectedInputForAnalysis}>
@@ -1182,7 +1390,18 @@ export function ModuleDetails({
                     <>
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
-                          <Label>Input Change Percentage: {sensitivityPercentage}%</Label>
+                          <div className="flex items-center gap-2">
+                            <Label>Input Change Percentage: {sensitivityPercentage}%</Label>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={resetSensitivityPercentage}
+                              className="h-6 px-2"
+                              disabled={sensitivityPercentage === 0}
+                            >
+                              <RotateCcw className="h-3 w-3 mr-1" /> Reset
+                            </Button>
+                          </div>
                           <span className="text-sm text-muted-foreground">How much to adjust the input value</span>
                         </div>
                         <Slider
@@ -1216,14 +1435,16 @@ export function ModuleDetails({
                         </div>
                       </div>
 
-                      <Button onClick={runSensitivityAnalysis} disabled={isSimulating} className="w-full">
-                        {isSimulating ? "Analyzing..." : "Run Impact Analysis"}
-                        {isSimulating ? (
-                          <RefreshCw className="ml-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Sliders className="ml-2 h-4 w-4" />
-                        )}
-                      </Button>
+                      <div className="col-span-2">
+                        <Button onClick={runSensitivityAnalysis} disabled={isSimulating} className="w-full">
+                          {isSimulating ? "Analyzing..." : "Run Impact Analysis"}
+                          {isSimulating ? (
+                            <RefreshCw className="ml-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Sliders className="ml-2 h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
                     </>
                   )}
                 </div>
@@ -1232,19 +1453,21 @@ export function ModuleDetails({
 
             <TabsContent value="formula" className="space-y-4 mt-4">
               <Tabs defaultValue={isUserAdded ? "builder" : "code"}>
-                <TabsList className="grid grid-cols-2">
+                <TabsList className="grid grid-cols-2 w-full">
                   <TabsTrigger value="builder">Visual Builder</TabsTrigger>
                   <TabsTrigger value="code">{isUserAdded ? "Raw Code" : "Code (Read-only)"}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="builder" className="mt-4">
-                  <FormulaBuilder
-                    inputs={inputs}
-                    initialFormula={initialFormula}
-                    functionCode={functionCode}
-                    onChange={handleFunctionCodeChange}
-                    readOnly={!isUserAdded}
-                  />
+                  <div className="h-[400px]">
+                    <FormulaBuilder
+                      inputs={inputs}
+                      initialFormula={initialFormula}
+                      functionCode={functionCode}
+                      onChange={handleFunctionCodeChange}
+                      readOnly={!isUserAdded}
+                    />
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="code" className="mt-4">
@@ -1255,7 +1478,7 @@ export function ModuleDetails({
                       value={functionCode}
                       onChange={isUserAdded ? handleCodeChange : undefined}
                       readOnly={!isUserAdded}
-                      className={`font-mono text-sm h-[300px] ${!isUserAdded ? "bg-slate-50" : ""}`}
+                      className={`font-mono text-sm h-[400px] ${!isUserAdded ? "bg-slate-50" : ""}`}
                       placeholder="// Return an object with your outputs
 return {
   result: inputs.a + inputs.b
@@ -1287,27 +1510,29 @@ return {
                 </Button>
               </div>
 
-              {Object.entries(outputs).length === 0 ? (
-                <div className="text-sm text-muted-foreground p-4 text-center bg-slate-50 rounded-md">
-                  No outputs available. Try recalculating the module.
-                </div>
-              ) : (
-                Object.entries(outputs).map(([key, value]) => (
-                  <Card
-                    key={key}
-                    className="hover:border-primary cursor-pointer"
-                    onClick={() => openMetricDrilldown(key)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex justify-between items-center">
-                        <span className="font-medium">{key}</span>
-                        <span className="font-mono">{String(value)}</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">Click to analyze metric dependencies</div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(outputs).length === 0 ? (
+                  <div className="col-span-2 text-sm text-muted-foreground p-4 text-center bg-slate-50 rounded-md">
+                    No outputs available. Try recalculating the module.
+                  </div>
+                ) : (
+                  Object.entries(outputs).map(([key, value]) => (
+                    <Card
+                      key={key}
+                      className="hover:border-primary cursor-pointer"
+                      onClick={() => openMetricDrilldown(key)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">{key}</span>
+                          <span className="font-mono">{String(value)}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">Click to analyze metric dependencies</div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
+              </div>
             </TabsContent>
 
             <TabsContent value="explanation" className="space-y-4 mt-4">
@@ -1365,8 +1590,8 @@ return {
               Save & Close
             </Button>
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* Save as default confirmation dialog */}
       <AlertDialog open={isSaveDefaultConfirmOpen} onOpenChange={setSaveDefaultConfirmOpen}>
