@@ -19,6 +19,7 @@ import { FlowchartToolbar } from "@/components/flowchart-toolbar"
 import { HeatmapLegend } from "@/components/heatmap-legend"
 import { SensitivityDashboard, type SimulationResult } from "@/components/sensitivity-dashboard"
 import { AddModuleDialog } from "@/components/add-module-dialog"
+import { MetricView } from "@/components/metric-view"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -119,6 +120,7 @@ function FlowChart() {
   const [isSensitivityAnalysisOpen, setIsSensitivityAnalysisOpen] = useState(false)
   const [simulationResults, setSimulationResults] = useState<SimulationResult | null>(null)
   const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null)
+  const [isMetricViewOpen, setIsMetricViewOpen] = useState(false)
   const { toast } = useToast()
 
   // Update refs when state changes - use a single effect to minimize renders
@@ -942,7 +944,11 @@ function FlowChart() {
     }
   }, []) // Empty dependency array to run only once after initial nodes are loaded
 
-  // Return the FlowChart component with all necessary UI elements
+  const toggleMetricView = useCallback(() => {
+    setIsMetricViewOpen((prev) => !prev)
+  }, [])
+
+  // Add the return section to display the component
   return (
     <div className="h-full w-full flex flex-col">
       <FlowchartToolbar
@@ -956,46 +962,60 @@ function FlowChart() {
         onToggleAutoRecalculate={(enabled) => setAutoRecalculate(enabled)}
         onOpenSensitivityAnalysis={() => setIsSensitivityAnalysisOpen(true)}
         onToggleHeatmap={() => setHeatmapEnabled(!heatmapEnabled)}
+        onOpenMetricView={toggleMetricView}
         autoRecalculate={autoRecalculate}
         needsRecalculation={needsRecalculation}
         heatmapEnabled={heatmapEnabled}
         lastSaved={lastSavedTime}
       />
 
-      <div className="flex-1 relative">
-        <ReactFlow
-          ref={reactFlowWrapper}
-          nodes={heatmapEnabled ? nodesWithHeatmap() : nodes}
+      {/* Conditional rendering based on view mode */}
+      {isMetricViewOpen ? (
+        <MetricView
+          nodes={nodes}
           edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onNodeClick={onNodeClick}
-          onEdgeClick={(event, edge) => {
-            setSelectedEdge(edge)
-            setIsEdgeDialogOpen(true)
+          onClose={() => setIsMetricViewOpen(false)}
+          onSelectModule={(moduleId) => {
+            setSelectedNode(moduleId)
+            setIsMetricViewOpen(false)
           }}
-          nodeTypes={nodeTypes}
-          defaultEdgeOptions={defaultEdgeOptions}
-          fitView
-        >
-          <Background />
-          <Controls />
-          <MiniMap />
+        />
+      ) : (
+        <div className="flex-1 relative">
+          <ReactFlow
+            ref={reactFlowWrapper}
+            nodes={heatmapEnabled ? nodesWithHeatmap() : nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodeClick={onNodeClick}
+            onEdgeClick={(event, edge) => {
+              setSelectedEdge(edge)
+              setIsEdgeDialogOpen(true)
+            }}
+            nodeTypes={nodeTypes}
+            defaultEdgeOptions={defaultEdgeOptions}
+            fitView
+          >
+            <Background />
+            <Controls />
+            <MiniMap />
 
-          {heatmapEnabled && (
-            <HeatmapLegend
-              onClose={() => setHeatmapEnabled(false)}
-              metric={heatmapMetric}
-              minValue={heatmapMin}
-              maxValue={heatmapMax}
-            />
-          )}
-        </ReactFlow>
-      </div>
+            {heatmapEnabled && (
+              <HeatmapLegend
+                onClose={() => setHeatmapEnabled(false)}
+                metric={heatmapMetric}
+                minValue={heatmapMin}
+                maxValue={heatmapMax}
+              />
+            )}
+          </ReactFlow>
+        </div>
+      )}
 
       {/* Module details panel */}
-      {selectedNode && (
+      {selectedNode && !isMetricViewOpen && (
         <ModuleDetails
           nodeId={selectedNode}
           nodes={nodes}

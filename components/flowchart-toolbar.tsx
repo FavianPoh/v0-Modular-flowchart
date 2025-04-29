@@ -1,21 +1,10 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import {
-  PlusCircle,
-  Save,
-  RotateCcw,
-  RefreshCw,
-  Cable,
-  Code,
-  Library,
-  ToggleLeft,
-  ToggleRight,
-  BarChart4,
-  TrendingUp,
-} from "lucide-react"
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
-import { format } from "date-fns"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import { Plus, Link, Code, Save, RefreshCw, RotateCcw, BookOpen, BarChart3, Thermometer, Network } from "lucide-react"
 
 interface FlowchartToolbarProps {
   onAddModule: () => void
@@ -28,10 +17,11 @@ interface FlowchartToolbarProps {
   onToggleAutoRecalculate: (enabled: boolean) => void
   onOpenSensitivityAnalysis: () => void
   onToggleHeatmap: () => void
+  onOpenMetricView?: () => void
   autoRecalculate: boolean
   needsRecalculation: boolean
   heatmapEnabled: boolean
-  lastSaved?: Date | null
+  lastSaved: Date | null
 }
 
 export function FlowchartToolbar({
@@ -45,6 +35,7 @@ export function FlowchartToolbar({
   onToggleAutoRecalculate,
   onOpenSensitivityAnalysis,
   onToggleHeatmap,
+  onOpenMetricView,
   autoRecalculate,
   needsRecalculation,
   heatmapEnabled,
@@ -52,73 +43,115 @@ export function FlowchartToolbar({
 }: FlowchartToolbarProps) {
   return (
     <TooltipProvider>
-      <div className="border-b px-3 py-2 flex items-center justify-between gap-2 bg-background">
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={onAddModule} className="flex items-center gap-2">
-            <PlusCircle className="h-4 w-4" /> Add Module
-          </Button>
-          <Button size="sm" variant="outline" onClick={onManageConnections} className="flex items-center gap-2">
-            <Cable className="h-4 w-4" /> Connections
-          </Button>
-          <Button size="sm" variant="outline" onClick={onOpenLibrary} className="flex items-center gap-2">
-            <Library className="h-4 w-4" /> Library
-          </Button>
-          <Button size="sm" variant="outline" onClick={onExportCode} className="flex items-center gap-2">
-            <Code className="h-4 w-4" /> Export
-          </Button>
-          <Button size="sm" variant="outline" onClick={onOpenSensitivityAnalysis} className="flex items-center gap-2">
-            <TrendingUp className="h-4 w-4" /> Sensitivity Analysis
-          </Button>
-          <Button
-            size="sm"
-            variant={heatmapEnabled ? "default" : "outline"}
-            onClick={onToggleHeatmap}
-            className="flex items-center gap-2"
-          >
-            <BarChart4 className="h-4 w-4" /> {heatmapEnabled ? "Hide Heatmap" : "Show Heatmap"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onToggleAutoRecalculate(!autoRecalculate)}
-            className="flex items-center gap-2"
-          >
-            {autoRecalculate ? (
-              <>
-                <ToggleRight className="h-4 w-4" /> Auto Recalc: On
-              </>
-            ) : (
-              <>
-                <ToggleLeft className="h-4 w-4" /> Auto Recalc: Off
-              </>
-            )}
-          </Button>
-          {!autoRecalculate && needsRecalculation && (
-            <Button size="sm" onClick={onRecalculate} className="flex items-center gap-2">
-              <RefreshCw className="h-4 w-4" /> Recalculate
-            </Button>
+      <div className="flex items-center justify-between p-2 bg-gray-100 border-b">
+        <div className="flex items-center space-x-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onAddModule}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Add Module</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onManageConnections}>
+                <Link className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Manage Connections</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onExportCode}>
+                <Code className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Export Code</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onOpenLibrary}>
+                <BookOpen className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Module Library</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onOpenSensitivityAnalysis}>
+                <BarChart3 className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Sensitivity Analysis</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant={heatmapEnabled ? "secondary" : "outline"} size="icon" onClick={onToggleHeatmap}>
+                <Thermometer className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Toggle Heatmap</TooltipContent>
+          </Tooltip>
+
+          {onOpenMetricView && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="icon" onClick={onOpenMetricView}>
+                  <Network className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Metric View</TooltipContent>
+            </Tooltip>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {lastSaved && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-xs text-muted-foreground">
-                  Last saved: {format(lastSaved, "MMM d, h:mm:ss a")}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Last time your flowchart was automatically saved</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-          <Button size="sm" variant="default" onClick={onSaveFlowchart} className="flex items-center gap-2">
-            <Save className="h-4 w-4" /> Save
-          </Button>
-          <Button size="sm" variant="outline" onClick={onResetFlowchart} className="flex items-center gap-2">
-            <RotateCcw className="h-4 w-4" /> Reset
-          </Button>
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <Switch id="auto-recalculate" checked={autoRecalculate} onCheckedChange={onToggleAutoRecalculate} />
+            <Label htmlFor="auto-recalculate">Auto-recalculate</Label>
+          </div>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={needsRecalculation ? "default" : "outline"}
+                size="sm"
+                onClick={onRecalculate}
+                disabled={!needsRecalculation}
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Recalculate
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Recalculate Flowchart</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={onSaveFlowchart}>
+                <Save className="h-4 w-4 mr-1" />
+                Save
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {lastSaved ? `Last saved: ${lastSaved.toLocaleTimeString()}` : "Save flowchart"}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" onClick={onResetFlowchart}>
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Reset to Initial State</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </TooltipProvider>
