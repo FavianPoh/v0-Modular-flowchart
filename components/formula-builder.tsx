@@ -218,6 +218,9 @@ export function FormulaBuilder({
             // It's a variable or boolean literal
             if (name === "true" || name === "false") {
               tokens.push({ type: "boolean", value: name })
+            } else if (name === "if" || name === "then" || name === "else") {
+              tokens.push({ type: "operator", value: name })
+              continue
             } else if (Object.keys(inputs).includes(name)) {
               tokens.push({ type: "input", value: name })
             } else {
@@ -280,8 +283,15 @@ export function FormulaBuilder({
             .map((item) => {
               if (item.type === "input") {
                 return `Number(inputs.${item.value})`
-              } else if (item.type === "operator" && item.value === "^") {
-                return "**" // Convert ^ to ** for JavaScript exponentiation
+              } else if (item.type === "operator") {
+                if (item.value === "^") {
+                  return "**" // Convert ^ to ** for JavaScript exponentiation
+                } else if (item.value === "if" || item.value === "then" || item.value === "else") {
+                  // These operators will be part of the overall expression structure
+                  return item.value
+                } else {
+                  return item.value
+                }
               } else if (item.type === "boolean") {
                 return item.value // true or false
               } else if (item.type === "string") {
@@ -390,6 +400,14 @@ export function FormulaBuilder({
     setFormula((prev) => [...prev, { type: "input", value: inputName }])
   }
 
+  const addCustomInput = (inputName: string) => {
+    if (readOnly && !editMode) return
+    if (!inputName.trim()) return
+
+    // Add the custom input to the formula
+    setFormula((prev) => [...prev, { type: "input", value: inputName }])
+  }
+
   const addNumber = () => {
     if (readOnly && !editMode) return
     setFormula((prev) => [...prev, { type: "number", value: "0" }])
@@ -409,7 +427,7 @@ export function FormulaBuilder({
     if (readOnly && !editMode) return
 
     if (func === "if") {
-      // Add an if statement with empty condition, true and false expressions
+      // Add just the IF condition container
       setFormula((prev) => [
         ...prev,
         {
@@ -425,6 +443,36 @@ export function FormulaBuilder({
     } else {
       // For regular functions, add them with an empty parameter list
       setFormula((prev) => [...prev, { type: "function", value: func, params: [[]] }])
+    }
+  }
+
+  const addConditionalOperator = (type: "if" | "then" | "else") => {
+    if (readOnly && !editMode) return
+
+    if (type === "if") {
+      setFormula((prev) => [
+        ...prev,
+        {
+          type: "operator",
+          value: "if",
+        },
+      ])
+    } else if (type === "then") {
+      setFormula((prev) => [
+        ...prev,
+        {
+          type: "operator",
+          value: "then",
+        },
+      ])
+    } else if (type === "else") {
+      setFormula((prev) => [
+        ...prev,
+        {
+          type: "operator",
+          value: "else",
+        },
+      ])
     }
   }
 
@@ -507,9 +555,10 @@ export function FormulaBuilder({
         return (
           <div className="flex items-center">
             <Input
+              type="number"
               value={item.value}
               onChange={(e) => updateItem(index, e.target.value)}
-              className="w-16 h-8 text-sm"
+              className="w-20 h-8 text-sm"
               readOnly={readOnly && !editMode}
             />
             {(!readOnly || editMode) && (
@@ -754,22 +803,47 @@ export function FormulaBuilder({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="mb-2 block">Add Input</Label>
-              <div className="flex gap-2">
-                <Select onValueChange={addInput} disabled={readOnly && !editMode}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select input" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.keys(inputs).map((input) => (
-                      <SelectItem key={input} value={input}>
-                        {input}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" onClick={addNumber} disabled={readOnly && !editMode}>
-                  Number
-                </Button>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <Select onValueChange={addInput} disabled={readOnly && !editMode}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select input" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.keys(inputs).map((input) => (
+                        <SelectItem key={input} value={input}>
+                          {input}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button variant="outline" onClick={addNumber} disabled={readOnly && !editMode}>
+                    Number
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Custom input name"
+                    disabled={readOnly && !editMode}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        addCustomInput((e.target as HTMLInputElement).value)
+                        ;(e.target as HTMLInputElement).value = ""
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={(e) => {
+                      const input = e.currentTarget.previousSibling as HTMLInputElement
+                      addCustomInput(input.value)
+                      input.value = ""
+                    }}
+                    disabled={readOnly && !editMode}
+                  >
+                    Add
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -1090,8 +1164,32 @@ export function FormulaBuilder({
                     </Button>
                   </div>
 
-                  <Label className="text-xs text-muted-foreground mb-1">Conditional:</Label>
+                  <Label className="text-xs text-muted-foreground mb-1">Conditional Operators:</Label>
                   <div className="flex flex-wrap gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addConditionalOperator("if")}
+                      disabled={readOnly && !editMode}
+                    >
+                      IF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addConditionalOperator("then")}
+                      disabled={readOnly && !editMode}
+                    >
+                      THEN
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addConditionalOperator("else")}
+                      disabled={readOnly && !editMode}
+                    >
+                      ELSE
+                    </Button>
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1101,11 +1199,11 @@ export function FormulaBuilder({
                             onClick={() => addFunction("if")}
                             disabled={readOnly && !editMode}
                           >
-                            if-then-else
+                            if-then-else (block)
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p className="text-xs">Conditional expression: if(condition, trueValue, falseValue)</p>
+                          <p className="text-xs">Full conditional block: if(condition, trueValue, falseValue)</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>

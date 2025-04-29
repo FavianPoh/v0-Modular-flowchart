@@ -32,6 +32,17 @@ import {
 
 // Import ReactFlow components
 import ReactFlow, { Background, Controls, MiniMap } from "reactflow"
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 const nodeTypes = {
   moduleNode: ModuleNode,
@@ -83,6 +94,8 @@ function FlowChart() {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null)
+  const [isEdgeDialogOpen, setIsEdgeDialogOpen] = useState(false)
   const [isSaveDefaultConfirmOpen, setSaveDefaultConfirmOpen] = useState(false)
   const [nodeToSaveDefaults, setNodeToSaveDefaults] = useState<string | null>(null)
   const [isAddingModule, setIsAddingModule] = useState(false)
@@ -958,6 +971,10 @@ function FlowChart() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeClick={onNodeClick}
+          onEdgeClick={(event, edge) => {
+            setSelectedEdge(edge)
+            setIsEdgeDialogOpen(true)
+          }}
           nodeTypes={nodeTypes}
           defaultEdgeOptions={defaultEdgeOptions}
           fitView
@@ -1109,6 +1126,207 @@ function FlowChart() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edge Editing Dialog */}
+      <Dialog open={isEdgeDialogOpen} onOpenChange={(open) => !open && setIsEdgeDialogOpen(false)}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit Connection</DialogTitle>
+            <DialogDescription>Modify or remove the connection between modules.</DialogDescription>
+          </DialogHeader>
+
+          {selectedEdge && (
+            <div className="space-y-4 py-4">
+              {/* Source Node Selection */}
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="source-node" className="text-right">
+                  Source Module
+                </Label>
+                <Select
+                  defaultValue={selectedEdge.source}
+                  onValueChange={(value) => {
+                    setSelectedEdge({
+                      ...selectedEdge,
+                      source: value,
+                      sourceHandle: null, // Reset source handle when source changes
+                    })
+                  }}
+                >
+                  <SelectTrigger id="source-node" className="col-span-3">
+                    <SelectValue placeholder="Select source module" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.data.label} ({node.data.type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Source Output Selection */}
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="source-output" className="text-right">
+                  Output
+                </Label>
+                <Select
+                  defaultValue={selectedEdge.sourceHandle || ""}
+                  onValueChange={(value) => {
+                    setSelectedEdge({
+                      ...selectedEdge,
+                      sourceHandle: value,
+                    })
+                  }}
+                >
+                  <SelectTrigger id="source-output" className="col-span-3">
+                    <SelectValue placeholder="Select output" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedEdge.source &&
+                      nodes.find((n) => n.id === selectedEdge.source)?.data?.outputs &&
+                      Object.keys(nodes.find((n) => n.id === selectedEdge.source)?.data?.outputs || {}).map((key) => (
+                        <SelectItem key={`output-${key}`} value={`output-${key}`}>
+                          {key}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Target Node Selection */}
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="target-node" className="text-right">
+                  Target Module
+                </Label>
+                <Select
+                  defaultValue={selectedEdge.target}
+                  onValueChange={(value) => {
+                    setSelectedEdge({
+                      ...selectedEdge,
+                      target: value,
+                      targetHandle: null, // Reset target handle when target changes
+                    })
+                  }}
+                >
+                  <SelectTrigger id="target-node" className="col-span-3">
+                    <SelectValue placeholder="Select target module" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.data.label} ({node.data.type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Target Input Selection */}
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="target-input" className="text-right">
+                  Input
+                </Label>
+                <Select
+                  defaultValue={selectedEdge.targetHandle || ""}
+                  onValueChange={(value) => {
+                    setSelectedEdge({
+                      ...selectedEdge,
+                      targetHandle: value,
+                    })
+                  }}
+                >
+                  <SelectTrigger id="target-input" className="col-span-3">
+                    <SelectValue placeholder="Select input" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedEdge.target &&
+                      nodes.find((n) => n.id === selectedEdge.target)?.data?.inputs &&
+                      Object.keys(nodes.find((n) => n.id === selectedEdge.target)?.data?.inputs || {}).map((key) => (
+                        <SelectItem key={`input-${key}`} value={`input-${key}`}>
+                          {key}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex justify-between">
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (selectedEdge) {
+                  handleDeleteConnection(selectedEdge.id)
+                  setIsEdgeDialogOpen(false)
+                  setSelectedEdge(null)
+                }
+              }}
+            >
+              Remove Connection
+            </Button>
+            <div className="space-x-2">
+              <Button variant="outline" onClick={() => setIsEdgeDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (
+                    selectedEdge &&
+                    selectedEdge.source &&
+                    selectedEdge.target &&
+                    selectedEdge.sourceHandle &&
+                    selectedEdge.targetHandle
+                  ) {
+                    // Remove the old edge
+                    handleDeleteConnection(selectedEdge.id)
+
+                    // Add the new edge with updated properties
+                    const newEdge = {
+                      id: `e${selectedEdge.source}-${selectedEdge.target}-${Date.now()}`,
+                      source: selectedEdge.source,
+                      target: selectedEdge.target,
+                      sourceHandle: selectedEdge.sourceHandle,
+                      targetHandle: selectedEdge.targetHandle,
+                      animated: true,
+                      style: defaultEdgeOptions.style,
+                      markerEnd: defaultEdgeOptions.markerEnd,
+                    }
+
+                    setEdges((eds) => [...eds, newEdge])
+                    setNeedsRecalculation(true)
+
+                    // Close dialog
+                    setIsEdgeDialogOpen(false)
+                    setSelectedEdge(null)
+
+                    toast({
+                      title: "Connection updated",
+                      description: "The connection has been modified successfully",
+                    })
+                  } else {
+                    toast({
+                      title: "Invalid connection",
+                      description: "Please select source, target, output and input",
+                      variant: "destructive",
+                    })
+                  }
+                }}
+                disabled={
+                  !selectedEdge ||
+                  !selectedEdge.source ||
+                  !selectedEdge.target ||
+                  !selectedEdge.sourceHandle ||
+                  !selectedEdge.targetHandle
+                }
+              >
+                Save Changes
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
