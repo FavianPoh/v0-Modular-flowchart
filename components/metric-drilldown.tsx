@@ -34,6 +34,7 @@ type MetricSource = {
   impactScore: number // 0-100
   directImpact: boolean
   path: string[]
+  actualValue: any // Add this line
 }
 
 type ModuleInput = {
@@ -174,6 +175,9 @@ export function MetricDrilldown({
         // Direct connections have higher impact
         const impactScore = Math.max(10, Math.round(100 / (depth + 1)))
 
+        // Get the actual value of the source metric
+        const actualValue = sourceNode.data.outputs?.[sourceMetricName]
+
         sources.push({
           nodeId: sourceNode.id,
           nodeName: sourceNode.data.label,
@@ -182,6 +186,7 @@ export function MetricDrilldown({
           impactScore,
           directImpact: depth === 0,
           path: currentPath,
+          actualValue, // Add the actual value to the source object
         })
 
         // Recursively trace dependencies of the source node
@@ -326,182 +331,187 @@ export function MetricDrilldown({
     return order
   }, [buildDependencyGraph, nodes])
 
-  // Run sensitivity analysis on a selected input
-  const runSensitivityAnalysis = useCallback(() => {
-    if (!selectedNode || !selectedMetricForAnalysis || !selectedInputForAnalysis) return
+  const [runSensitivityAnalysisInner, setRunSensitivityAnalysisInner] = useState<() => void>(() => {})
 
-    setIsSimulating(true)
-    setSimulationResults(null)
+  useEffect(() => {
+    const runSensitivityAnalysisFn = () => {
+      if (!selectedNode || !selectedMetricForAnalysis || !selectedInputForAnalysis) return
 
-    // Use setTimeout to avoid blocking the UI
-    setTimeout(() => {
-      try {
-        // Deep clone nodes to avoid modifying the original
-        const clonedNodes = nodes.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            inputs: { ...node.data.inputs },
-            outputs: { ...node.data.outputs },
-            // Recreate function from functionCode
-            function: node.data.functionCode ? new Function("inputs", node.data.functionCode) : undefined,
-          },
-        }))
+      setIsSimulating(true)
+      setSimulationResults(null)
 
-        // Create a map for quick node lookup
-        const nodeMap = new Map(clonedNodes.map((node) => [node.id, node]))
+      // Use setTimeout to avoid blocking the UI
+      setTimeout(() => {
+        try {
+          // Deep clone nodes to avoid modifying the original
+          const clonedNodes = nodes.map((node) => ({
+            ...node,
+            data: {
+              ...node.data,
+              inputs: { ...node.data.inputs },
+              outputs: { ...node.data.outputs },
+              // Recreate function from functionCode
+              function: node.data.functionCode ? new Function("inputs", node.data.functionCode) : undefined,
+            },
+          }))
 
-        // Get the original value of the target metric
-        const originalTargetValue = selectedNode.data.outputs?.[selectedMetricForAnalysis]
+          // Create a map for quick node lookup
+          const nodeMap = new Map(clonedNodes.map((node) => [node.id, node]))
 
-        // Store original outputs for all nodes
-        const originalOutputs = new Map<string, Record<string, any>>()
-        clonedNodes.forEach((node) => {
-          originalOutputs.set(node.id, { ...node.data.outputs })
-        })
+          // Get the original value of the target metric
+          const originalTargetValue = selectedNode.data.outputs?.[selectedMetricForAnalysis]
 
-        // Find the node to modify
-        const targetNodeId = selectedInputForAnalysis.nodeId
-        let targetNode = nodeMap.get(targetNodeId)
-        if (!targetNode) {
-          setIsSimulating(false)
-          return
-        }
-
-        // Get original input value
-        const inputName = selectedInputForAnalysis.inputName
-        const originalValue = targetNode.data.inputs[inputName]
-
-        // Calculate new value based on percentage change
-        const newValue =
-          typeof originalValue === "number" ? originalValue * (1 + sensitivityPercentage / 100) : originalValue
-
-        // Update the input of the target node
-        targetNode.data.inputs[inputName] = newValue
-
-        // If this is an input node, also update the output with the same name if it exists
-        if (targetNode.data.type === "input" && targetNode.data.outputs[inputName] !== undefined) {
-          targetNode.data.outputs[inputName] = newValue
-        }
-
-        // Build dependency graph and get execution order
-        const executionOrder = topologicalSort()
-
-        // Group edges by target node for efficient lookup
-        const edgesByTarget: Record<string, Edge[]> = {}
-        edges.forEach((edge) => {
-          if (!edgesByTarget[edge.target]) {
-            edgesByTarget[edge.target] = []
-          }
-          edgesByTarget[edge.target].push(edge)
-        })
-
-        // Track affected nodes
-        const affectedNodes: {
-          nodeId: string
-          nodeName: string
-          nodeType: string
-          originalOutputs: Record<string, any>
-          newOutputs: Record<string, any>
-          isTarget?: boolean
-        }[] = []
-
-        // Execute nodes in order
-        for (const nodeId of executionOrder) {
-          const node = nodeMap.get(nodeId)
-          if (!node || !node.data.function) continue
-
-          // Skip nodes that don't need recalculation
-          if (
-            nodeId !== targetNodeId &&
-            !buildDependencyGraph(clonedNodes)[nodeId].some((depId) => affectedNodes.some((n) => n.nodeId === depId))
-          ) {
-            continue
-          }
-
-          // Get edges targeting this node
-          const targetingEdges = edgesByTarget[nodeId] || []
-
-          // Update inputs based on source node outputs
-          targetingEdges.forEach((edge) => {
-            const sourceNode = nodeMap.get(edge.source)
-            if (!sourceNode) return
-
-            // Extract input and output keys from handles
-            const sourceOutputKey = edge.sourceHandle?.replace("output-", "")
-            const targetInputKey = edge.targetHandle?.replace("input-", "")
-
-            if (sourceOutputKey && targetInputKey && sourceNode.data.outputs[sourceOutputKey] !== undefined) {
-              // Update the input
-              node.data.inputs[targetInputKey] = sourceNode.data.outputs[sourceOutputKey]
-            }
+          // Store original outputs for all nodes
+          const originalOutputs = new Map<string, Record<string, any>>()
+          clonedNodes.forEach((node) => {
+            originalOutputs.set(node.id, { ...node.data.outputs })
           })
 
-          // Store original outputs
-          const originalNodeOutputs = originalOutputs.get(nodeId) || {}
-
-          // Recalculate outputs
-          try {
-            node.data.outputs = node.data.function(node.data.inputs)
-          } catch (simError) {
-            console.error("Error in sensitivity simulation:", simError)
+          // Find the node to modify
+          const targetNodeId = selectedInputForAnalysis.nodeId
+          let targetNode = nodeMap.get(targetNodeId)
+          if (!targetNode) {
+            setIsSimulating(false)
+            return
           }
 
-          // Check if outputs changed
-          const outputsChanged = Object.keys(node.data.outputs).some(
-            (key) => node.data.outputs[key] !== originalNodeOutputs[key],
-          )
+          // Get original input value
+          const inputName = selectedInputForAnalysis.inputName
+          const originalValue = targetNode.data.inputs[inputName]
 
-          if (outputsChanged) {
-            affectedNodes.push({
-              nodeId: node.id,
-              nodeName: node.data.label,
-              nodeType: node.data.type,
-              originalOutputs: originalNodeOutputs,
-              newOutputs: { ...node.data.outputs },
-              isTarget: node.id === selectedNodeId,
+          // Calculate new value based on percentage change
+          const newValue =
+            typeof originalValue === "number" ? originalValue * (1 + sensitivityPercentage / 100) : originalValue
+
+          // Update the input of the target node
+          targetNode.data.inputs[inputName] = newValue
+
+          // If this is an input node, also update the output with the same name if it exists
+          if (targetNode.data.type === "input" && targetNode.data.outputs[inputName] !== undefined) {
+            targetNode.data.outputs[inputName] = newValue
+          }
+
+          // Build dependency graph and get execution order
+          const executionOrder = topologicalSort()
+
+          // Group edges by target node for efficient lookup
+          const edgesByTarget: Record<string, Edge[]> = {}
+          edges.forEach((edge) => {
+            if (!edgesByTarget[edge.target]) {
+              edgesByTarget[edge.target] = []
+            }
+            edgesByTarget[edge.target].push(edge)
+          })
+
+          // Track affected nodes
+          const affectedNodes: {
+            nodeId: string
+            nodeName: string
+            nodeType: string
+            originalOutputs: Record<string, any>
+            newOutputs: Record<string, any>
+            isTarget?: boolean
+          }[] = []
+
+          // Execute nodes in order
+          for (const nodeId of executionOrder) {
+            const node = nodeMap.get(nodeId)
+            if (!node || !node.data.function) continue
+
+            // Skip nodes that don't need recalculation
+            if (
+              nodeId !== targetNodeId &&
+              !buildDependencyGraph(clonedNodes)[nodeId].some((depId) => affectedNodes.some((n) => n.nodeId === depId))
+            ) {
+              continue
+            }
+
+            // Get edges targeting this node
+            const targetingEdges = edgesByTarget[nodeId] || []
+
+            // Update inputs based on source node outputs
+            targetingEdges.forEach((edge) => {
+              const sourceNode = nodeMap.get(edge.source)
+              if (!sourceNode) return
+
+              // Extract input and output keys from handles
+              const sourceOutputKey = edge.sourceHandle?.replace("output-", "")
+              const targetInputKey = edge.targetHandle?.replace("input-", "")
+
+              if (sourceOutputKey && targetInputKey && sourceNode.data.outputs[sourceOutputKey] !== undefined) {
+                // Update the input
+                node.data.inputs[targetInputKey] = sourceNode.data.outputs[sourceOutputKey]
+              }
             })
+
+            // Store original outputs
+            const originalNodeOutputs = originalOutputs.get(nodeId) || {}
+
+            // Recalculate outputs
+            try {
+              node.data.outputs = node.data.function(node.data.inputs)
+            } catch (simError) {
+              console.error("Error in sensitivity simulation:", simError)
+            }
+
+            // Check if outputs changed
+            const outputsChanged = Object.keys(node.data.outputs).some(
+              (key) => node.data.outputs[key] !== originalNodeOutputs[key],
+            )
+
+            if (outputsChanged) {
+              affectedNodes.push({
+                nodeId: node.id,
+                nodeName: node.data.label,
+                nodeType: node.data.type,
+                originalOutputs: originalNodeOutputs,
+                newOutputs: { ...node.data.outputs },
+                isTarget: node.id === selectedNodeId,
+              })
+            }
           }
+
+          // Get the new value of the target metric
+          targetNode = nodeMap.get(selectedNodeId)
+          const newTargetValue = targetNode?.data.outputs?.[selectedMetricForAnalysis]
+
+          // Calculate percentage change for target metric
+          const percentChange =
+            originalTargetValue !== 0 && typeof originalTargetValue === "number" && typeof newTargetValue === "number"
+              ? ((newTargetValue - originalTargetValue) / Math.abs(originalTargetValue)) * 100
+              : 0
+
+          // Create simulation results
+          const results: SimulationResult = {
+            changedInput: {
+              nodeId: selectedInputForAnalysis.nodeId,
+              nodeName: selectedInputForAnalysis.nodeName,
+              inputName: selectedInputForAnalysis.inputName,
+              originalValue,
+              newValue,
+            },
+            affectedNodes,
+            targetMetric: {
+              nodeId: selectedNodeId,
+              nodeName: selectedNode.data.label,
+              metricName: selectedMetricForAnalysis,
+              originalValue: originalTargetValue,
+              newValue: newTargetValue,
+              percentChange,
+            },
+          }
+
+          setSimulationResults(results)
+          setIsDashboardOpen(true)
+        } catch (error) {
+          console.error("Error in sensitivity analysis:", error)
+        } finally {
+          setIsSimulating(false)
         }
+      }, 100)
+    }
 
-        // Get the new value of the target metric
-        targetNode = nodeMap.get(selectedNodeId)
-        const newTargetValue = targetNode?.data.outputs?.[selectedMetricForAnalysis]
-
-        // Calculate percentage change for target metric
-        const percentChange =
-          originalTargetValue !== 0 && typeof originalTargetValue === "number" && typeof newTargetValue === "number"
-            ? ((newTargetValue - originalTargetValue) / Math.abs(originalTargetValue)) * 100
-            : 0
-
-        // Create simulation results
-        const results: SimulationResult = {
-          changedInput: {
-            nodeId: selectedInputForAnalysis.nodeId,
-            nodeName: selectedInputForAnalysis.nodeName,
-            inputName: selectedInputForAnalysis.inputName,
-            originalValue,
-            newValue,
-          },
-          affectedNodes,
-          targetMetric: {
-            nodeId: selectedNodeId,
-            nodeName: selectedNode.data.label,
-            metricName: selectedMetricForAnalysis,
-            originalValue: originalTargetValue,
-            newValue: newTargetValue,
-            percentChange,
-          },
-        }
-
-        setSimulationResults(results)
-        setIsDashboardOpen(true)
-      } catch (error) {
-        console.error("Error in sensitivity analysis:", error)
-      } finally {
-        setIsSimulating(false)
-      }
-    }, 100)
+    setRunSensitivityAnalysisInner(() => runSensitivityAnalysisFn)
   }, [
     selectedNode,
     selectedMetricForAnalysis,
@@ -513,6 +523,11 @@ export function MetricDrilldown({
     buildDependencyGraph,
     topologicalSort,
   ])
+
+  // Run sensitivity analysis on a selected input
+  const runSensitivityAnalysis = useCallback(() => {
+    runSensitivityAnalysisInner()
+  }, [runSensitivityAnalysisInner])
 
   // Reset sensitivity analysis
   const resetSensitivityAnalysis = useCallback(() => {
@@ -629,6 +644,15 @@ export function MetricDrilldown({
                               <span className="font-mono">{source.metricName}</span>
                               <ArrowRight className="h-3 w-3" />
                               <span className="font-mono">{selectedMetricForAnalysis}</span>
+                            </div>
+                            {/* Add the actual value display here */}
+                            <div className="text-sm mt-1">
+                              <span className="text-muted-foreground">Value: </span>
+                              <span className="font-mono font-medium">
+                                {typeof source.actualValue === "number"
+                                  ? source.actualValue.toFixed(2)
+                                  : String(source.actualValue)}
+                              </span>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
